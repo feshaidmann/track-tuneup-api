@@ -11,7 +11,11 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-app = FastAPI(title="track-tuneup-api")
+app = FastAPI()
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
 
 PRESETS = {
     "spotify":     {"integrated_lufs": -14.0, "true_peak": -1.0, "lra_min": 6,  "lra_max": 18},
