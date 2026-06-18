@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.env
+*.wav
+*.mp3
+*.flac
+*.aiff
+*.aif
+/tmp_audio/
+.DS_Store
