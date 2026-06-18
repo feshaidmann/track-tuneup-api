@@ -1,7 +1,5 @@
-import os
 import tempfile
 import subprocess
-import uuid
 import json
 from pathlib import Path
 from typing import Literal
@@ -12,13 +10,8 @@ import pyloudnorm as pyln
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from supabase import create_client
 
 app = FastAPI(title="track-tuneup-api")
-
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
-BUCKET = "audio-corrected"
 
 PRESETS = {
     "spotify":     {"integrated_lufs": -14.0, "true_peak": -1.0, "lra_min": 6,  "lra_max": 18},
@@ -35,6 +28,8 @@ PresetName = Literal["spotify", "apple_music", "youtube", "club", "radio", "cd_m
 class AnalyzeRequest(BaseModel):
     file_url: str
     preset: PresetName
+    corrected_upload_url: str
+    corrected_path: str
 
 
 class Metric(BaseModel):
@@ -53,7 +48,6 @@ class AnalyzeResponse(BaseModel):
     summary: str
     summary_status: Literal["ok", "warning", "critical"]
     metrics: list[Metric]
-    corrected_file_url: str
 
 
 def _download(url: str, dest: Path) -> None:
@@ -79,7 +73,6 @@ def _true_peak_ffmpeg(path: str) -> float:
 
 
 def _loudnorm_two_pass(src: str, dst: str, target_i: float, target_tp: float) -> None:
-    # first pass — measure
     cmd1 = [
         "ffmpeg", "-i", src,
         "-af", f"loudnorm=I={target_i}:TP={target_tp}:LRA=11:print_format=json",
@@ -91,13 +84,12 @@ def _loudnorm_two_pass(src: str, dst: str, target_i: float, target_tp: float) ->
     end = combined.rfind("}") + 1
     data = json.loads(combined[start:end])
 
-    measured_i  = data["input_i"]
-    measured_lra = data["input_lra"]
-    measured_tp = data["input_tp"]
+    measured_i     = data["input_i"]
+    measured_lra   = data["input_lra"]
+    measured_tp    = data["input_tp"]
     measured_thresh = data["input_thresh"]
-    offset = data["target_offset"]
+    offset         = data["target_offset"]
 
-    # second pass — encode
     af = (
         f"loudnorm=I={target_i}:TP={target_tp}:LRA=11"
         f":measured_I={measured_i}:measured_LRA={measured_lra}"
@@ -106,16 +98,6 @@ def _loudnorm_two_pass(src: str, dst: str, target_i: float, target_tp: float) ->
     )
     cmd2 = ["ffmpeg", "-y", "-i", src, "-af", af, dst]
     subprocess.run(cmd2, check=True, capture_output=True)
-
-
-def _dc_offset(data: np.ndarray) -> float:
-    if data.ndim == 1:
-        return float(np.abs(np.mean(data)))
-    return float(np.max(np.abs(np.mean(data, axis=0))))
-
-
-def _remove_dc_offset_sox(src: str, dst: str) -> None:
-    subprocess.run(["sox", src, dst, "dcshift", "0"], check=True, capture_output=True)
 
 
 def _gain_adjust(data: np.ndarray, gain_db: float) -> np.ndarray:
@@ -175,7 +157,7 @@ async def analyze(req: AnalyzeRequest):
         corrected_path = tmp / "corrected.wav"
         intermediate_path = tmp / "intermediate.wav"
 
-        # 1. Download
+        # 1. Download original file
         try:
             _download(req.file_url, src_path)
         except Exception as e:
@@ -189,9 +171,8 @@ async def analyze(req: AnalyzeRequest):
 
         meter = pyln.Meter(rate)
         metrics: list[Metric] = []
-        corrections_applied = False
 
-        # --- Loudness metrics ---
+        # --- Loudness ---
         try:
             integrated = meter.integrated_loudness(data)
         except Exception:
@@ -204,7 +185,7 @@ async def analyze(req: AnalyzeRequest):
         except Exception:
             lra = 0.0
 
-        # --- Peak metrics ---
+        # --- Peaks ---
         sample_peak_linear = float(np.max(np.abs(data)))
         sample_peak_db = 20 * np.log10(sample_peak_linear) if sample_peak_linear > 0 else -120.0
 
@@ -225,29 +206,23 @@ async def analyze(req: AnalyzeRequest):
             phase_corr = 1.0
 
         # ================================================================
-        # Corrections — work on a copy
+        # Corrections — only LUFS normalization and True Peak limiting
         # ================================================================
         working = data.copy()
         current_lufs = integrated
         corrected_flags: dict[str, bool] = {}
 
-        # DC offset removal
-        dc = _dc_offset(working)
-        if dc > 0.01:
-            sf.write(str(intermediate_path), working, rate)
-            _remove_dc_offset_sox(str(intermediate_path), str(corrected_path))
-            working, _ = sf.read(str(corrected_path), always_2d=True)
+        target_lufs = preset["integrated_lufs"]
+        target_tp = preset["true_peak"]
 
         # LUFS normalization via gain
-        target_lufs = preset["integrated_lufs"]
         gain_needed = target_lufs - current_lufs
         if abs(gain_needed) > 0.2:
             working = _gain_adjust(working, gain_needed)
             current_lufs = target_lufs
             corrected_flags["integrated_lufs"] = True
 
-        # True peak limiting — two-pass loudnorm via ffmpeg
-        target_tp = preset["true_peak"]
+        # True Peak limiting — two-pass loudnorm via ffmpeg
         if true_peak > target_tp:
             sf.write(str(intermediate_path), working, rate)
             _loudnorm_two_pass(
@@ -257,141 +232,162 @@ async def analyze(req: AnalyzeRequest):
             working, _ = sf.read(str(corrected_path), always_2d=True)
             corrected_flags["true_peak"] = True
 
-        # Write final corrected file
+        # Write final corrected WAV
         sf.write(str(corrected_path), working, rate)
 
+        # 4. Upload corrected file via signed PUT URL
+        try:
+            wav_bytes = corrected_path.read_bytes()
+            put_resp = requests.put(
+                req.corrected_upload_url,
+                data=wav_bytes,
+                headers={"Content-Type": "audio/wav"},
+                timeout=120,
+            )
+            put_resp.raise_for_status()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Falha ao enviar arquivo corrigido: {e}")
+
         # ================================================================
-        # Build metric entries
+        # Build metrics (order: loudness, peaks, dynamics, stereo)
         # ================================================================
 
         # integrated_lufs
         diff_lufs = abs(integrated - target_lufs)
-        lufs_status = "critical" if diff_lufs > 2 else ("warning" if diff_lufs > 0.5 else "ok")
-        lufs_corrected = corrected_flags.get("integrated_lufs", False)
-        if lufs_status == "critical" and lufs_corrected:
-            lufs_msg = (
-                f"Sua faixa estava {diff_lufs:.1f} LU {'acima' if integrated > target_lufs else 'abaixo'} "
-                f"do target do {preset_label}. A plataforma reduziria o volume automaticamente, "
-                f"prejudicando o impacto. Corrigimos para {target_lufs} LUFS."
-            )
-        elif lufs_status == "ok":
-            lufs_msg = f"Loudness integrada dentro do padrão para {preset_label}."
+        if diff_lufs <= 1.0:
+            lufs_status = "ok"
+        elif diff_lufs <= 3.0:
+            lufs_status = "warning"
         else:
-            lufs_msg = f"Loudness levemente fora do ideal para {preset_label}. Ajuste recomendado."
-        metrics.append(_build_metric("loudness", "Loudness Integrada", "integrated_lufs",
+            lufs_status = "critical"
+        lufs_corrected = corrected_flags.get("integrated_lufs", False)
+        direction = "acima" if integrated > target_lufs else "abaixo"
+        if lufs_status == "ok":
+            lufs_msg = f"Seu volume está dentro do ideal para {preset_label}."
+        elif lufs_corrected:
+            lufs_msg = (
+                f"Seu volume estava {diff_lufs:.1f} LUFS {direction} do ideal para {preset_label}. "
+                f"Ajustamos na versão corrigida."
+            )
+        else:
+            lufs_msg = (
+                f"Seu volume está {diff_lufs:.1f} LUFS {direction} do ideal para {preset_label}. "
+                f"Recomendamos ajustar na DAW."
+            )
+        metrics.append(_build_metric("loudness", "Volume integrado", "integrated_lufs",
                                      integrated, target_lufs, "LUFS", lufs_status, lufs_corrected, lufs_msg))
 
-        # short_term_lufs
-        st_diff = abs(st_lufs - target_lufs)
-        st_status = "warning" if st_diff > 6 else "ok"
-        st_msg = ("A loudness de curto prazo está muito estável — a faixa pode soar monótona."
-                  if st_status == "warning" else "Variação de loudness de curto prazo adequada.")
-        metrics.append(_build_metric("loudness", "Loudness Curto Prazo", "short_term_lufs",
-                                     st_lufs, target_lufs, "LUFS", st_status, False, st_msg))
-
-        # loudness_range
-        lra_min, lra_max = preset["lra_min"], preset["lra_max"]
-        lra_status = "warning" if (lra < lra_min or lra > lra_max) else "ok"
-        lra_msg = (f"Faixa dinâmica ({lra:.1f} LU) fora do intervalo ideal ({lra_min}–{lra_max} LU) para {preset_label}."
-                   if lra_status == "warning" else f"Faixa dinâmica dentro do ideal para {preset_label}.")
-        metrics.append(_build_metric("loudness", "Loudness Range", "loudness_range",
-                                     lra, float(lra_min + lra_max) / 2, "LU", lra_status, False, lra_msg))
-
-        # sample_peak
-        sp_status = "warning" if sample_peak_db > -0.1 else "ok"
-        sp_msg = ("Pico de amostra muito próximo do 0 dBFS — risco de clipping digital."
-                  if sp_status == "warning" else "Nível de pico de amostra seguro.")
-        metrics.append(_build_metric("peaks", "Sample Peak", "sample_peak",
-                                     sample_peak_db, -0.1, "dBFS", sp_status, False, sp_msg))
+        # short_term_lufs — always ok (informative)
+        metrics.append(_build_metric("loudness", "Volume de curto prazo", "short_term_lufs",
+                                     st_lufs, target_lufs, "LUFS", "ok", False,
+                                     "Medição informativa do volume no trecho central da faixa."))
 
         # true_peak
         tp_corrected = corrected_flags.get("true_peak", False)
         tp_status = "critical" if true_peak > target_tp else "ok"
         if tp_status == "critical" and tp_corrected:
-            tp_msg = (f"Sua faixa tinha picos acima do limite seguro para streaming. "
-                      f"Isso causa distorção na conversão do codec. Limitamos os picos para {target_tp} dBTP.")
+            tp_msg = (
+                f"Sua faixa tinha picos acima do limite seguro. "
+                f"Isso causa distorção no streaming. Limitamos para {target_tp} dBTP."
+            )
         elif tp_status == "critical":
-            tp_msg = (f"True peak acima do limite ({target_tp} dBTP). "
-                      f"Isso pode causar distorção em plataformas de streaming.")
+            tp_msg = (
+                f"Sua faixa tem picos acima do limite seguro ({target_tp} dBTP). "
+                f"Isso pode causar distorção nas plataformas de streaming."
+            )
         else:
-            tp_msg = "True peak dentro do limite seguro para streaming."
-        metrics.append(_build_metric("peaks", "True Peak", "true_peak",
+            tp_msg = "Picos dentro do limite seguro para streaming."
+        metrics.append(_build_metric("peaks", "Pico verdadeiro", "true_peak",
                                      true_peak, target_tp, "dBTP", tp_status, tp_corrected, tp_msg))
 
+        # sample_peak
+        sp_status = "warning" if sample_peak_db > -0.5 else "ok"
+        sp_msg = (
+            "O pico de amostra está muito próximo do limite máximo — risco de distorção digital."
+            if sp_status == "warning"
+            else "Nível de pico de amostra seguro."
+        )
+        metrics.append(_build_metric("peaks", "Pico de amostra", "sample_peak",
+                                     sample_peak_db, -0.5, "dBFS", sp_status, False, sp_msg))
+
         # dynamic_range
-        dr_status = "critical" if dynamic_range < 3 else ("warning" if dynamic_range < 6 else "ok")
+        if dynamic_range >= 8.0:
+            dr_status = "ok"
+        elif dynamic_range >= 4.0:
+            dr_status = "warning"
+        else:
+            dr_status = "critical"
         dr_msg = {
+            "ok":       "Faixa dinâmica adequada — boa variação entre partes suaves e intensas.",
+            "warning":  "Sua faixa está muito comprimida. Pouca variação de volume pode cansar o ouvinte.",
             "critical": "Sua faixa está extremamente comprimida. A diferença entre os momentos mais altos e mais baixos é mínima — isso soa cansativo e sem vida.",
-            "warning":  "Sua faixa está muito comprimida. Pouca variação de volume pode deixar a música cansativa para ouvir.",
-            "ok":       "Faixa dinâmica adequada.",
         }[dr_status]
-        metrics.append(_build_metric("dynamics", "Faixa Dinâmica", "dynamic_range",
+        metrics.append(_build_metric("dynamics", "Faixa dinâmica", "dynamic_range",
                                      dynamic_range, 9.0, "dB", dr_status, False, dr_msg))
 
+        # loudness_range
+        lra_min, lra_max = preset["lra_min"], preset["lra_max"]
+        lra_status = "warning" if (lra < lra_min or lra > lra_max) else "ok"
+        lra_msg = (
+            f"A variação de loudness ({lra:.1f} LU) está fora do intervalo ideal ({lra_min}–{lra_max} LU) para {preset_label}."
+            if lra_status == "warning"
+            else f"Variação de loudness dentro do ideal para {preset_label}."
+        )
+        metrics.append(_build_metric("dynamics", "Variação de loudness", "loudness_range",
+                                     lra, float(lra_min + lra_max) / 2, "LU", lra_status, False, lra_msg))
+
         # lr_balance
-        lr_status = "critical" if lr_balance > 3 else ("warning" if lr_balance > 1 else "ok")
+        if lr_balance <= 1.0:
+            lr_status = "ok"
+        elif lr_balance <= 3.0:
+            lr_status = "warning"
+        else:
+            lr_status = "critical"
         if lr_status in ("warning", "critical"):
-            lr_msg = (f"Seu canal direito está {lr_balance:.1f}% {'mais alto' if rms_r > rms_l else 'mais baixo'} "
-                      f"que o esquerdo. Isso pode causar sensação de desconforto no ouvinte. "
-                      f"Recomendamos corrigir na DAW.")
+            side = "direito" if rms_r > rms_l else "esquerdo"
+            lr_msg = (
+                f"O canal {side} está {lr_balance:.1f}% mais alto que o outro. "
+                f"Recomendamos corrigir na DAW."
+            )
         else:
             lr_msg = "Balanço entre canal esquerdo e direito adequado."
         metrics.append(_build_metric("stereo", "Balanço L/R", "lr_balance",
                                      lr_balance, 0.0, "%", lr_status, False, lr_msg))
 
         # phase_correlation
-        pc_status = "critical" if phase_corr < 0.0 else ("warning" if phase_corr < 0.5 else "ok")
+        if phase_corr >= 0.7:
+            pc_status = "ok"
+        elif phase_corr >= 0.3:
+            pc_status = "warning"
+        else:
+            pc_status = "critical"
         if pc_status == "critical":
-            pc_msg = ("Sua faixa tem problemas de fase — partes do som se cancelam mutuamente. "
-                      "Isso soa fraco em mono. Verifique na DAW.")
+            pc_msg = "Sua faixa tem cancelamento de fase — partes do som se anulam em mono. Verifique na DAW."
         elif pc_status == "warning":
-            pc_msg = ("A correlação de fase está baixa. Em sistemas mono a faixa pode soar mais fraca. "
-                      "Verifique os elementos estéreo na DAW.")
+            pc_msg = "A correlação de fase está baixa. Em sistemas mono a faixa pode soar mais fraca. Verifique os elementos estéreo na DAW."
         else:
             pc_msg = "Correlação de fase adequada — soa bem tanto em estéreo quanto em mono."
-        metrics.append(_build_metric("stereo", "Correlação de Fase", "phase_correlation",
+        metrics.append(_build_metric("stereo", "Correlação de fase", "phase_correlation",
                                      phase_corr, 1.0, "", pc_status, False, pc_msg))
-
-        # ================================================================
-        # Upload corrected file to Supabase Storage
-        # ================================================================
-        corrected_file_url = ""
-        try:
-            sb = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-            dest_key = f"{uuid.uuid4()}.wav"
-            with open(str(corrected_path), "rb") as f:
-                sb.storage.from_(BUCKET).upload(dest_key, f, {"content-type": "audio/wav"})
-            corrected_file_url = sb.storage.from_(BUCKET).get_public_url(dest_key)
-        except Exception as e:
-            corrected_file_url = f"upload_error: {e}"
 
         # ================================================================
         # Summary
         # ================================================================
         n_critical = sum(1 for m in metrics if m.status == "critical")
         n_warning  = sum(1 for m in metrics if m.status == "warning")
-        n_corrected = sum(1 for m in metrics if m.corrected)
-        uncorrected_critical = sum(1 for m in metrics if m.status == "critical" and not m.corrected)
 
         if n_critical == 0 and n_warning == 0:
             summary_status = "ok"
             summary = f"Sua faixa está pronta para o {preset_label}. Nenhum problema encontrado."
-        elif uncorrected_critical > 0:
-            summary_status = "critical"
-            summary = (f"Sua faixa tem {uncorrected_critical} problema{'s' if uncorrected_critical > 1 else ''} "
-                       f"que precisa{'m' if uncorrected_critical > 1 else ''} ser corrigido{'s' if uncorrected_critical > 1 else ''} "
-                       f"na DAW antes de lançar.")
-        elif n_corrected > 0:
+        elif n_critical == 0:
             summary_status = "warning"
-            summary = (f"Encontramos {n_corrected} problema{'s' if n_corrected > 1 else ''} e "
-                       f"corrigimos automaticamente. Baixe a versão corrigida.")
+            summary = f"Encontramos {n_warning} ponto{'s' if n_warning > 1 else ''} de atenção. Verifique os detalhes abaixo."
         else:
-            summary_status = "warning"
-            summary = f"Encontramos {n_warning} aviso{'s' if n_warning > 1 else ''}. Verifique os detalhes abaixo."
+            summary_status = "critical"
+            summary = f"Encontramos {n_critical} problema{'s' if n_critical > 1 else ''} que precisa{'m' if n_critical > 1 else ''} de atenção antes de lançar."
 
         return AnalyzeResponse(
             summary=summary,
             summary_status=summary_status,
             metrics=metrics,
-            corrected_file_url=corrected_file_url,
         )
