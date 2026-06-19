@@ -39,9 +39,10 @@ interface Props {
   filename: string
   onCorrect: () => void
   onReset: () => void
+  disabled?: boolean
 }
 
-export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset }: Props) {
+export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset, disabled = false }: Props) {
   const cfg = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
 
@@ -79,8 +80,8 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
       <p className="text-sm text-dim leading-relaxed">{verdict}</p>
 
       {/* Metrics table */}
-      <div className="rounded-lg border border-muted overflow-hidden">
-        <table className="w-full">
+      <div className="rounded-lg border border-muted overflow-x-auto">
+        <table className="w-full min-w-[28rem]">
           <thead>
             <tr className="bg-surface border-b border-muted">
               <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
@@ -123,13 +124,15 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
       <div className="flex gap-3 pt-2">
         <button
           onClick={onCorrect}
-          className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
+          disabled={disabled}
+          className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           Corrigir volume e picos →
         </button>
         <button
           onClick={onReset}
-          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors"
+          disabled={disabled}
+          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           Trocar arquivo
         </button>

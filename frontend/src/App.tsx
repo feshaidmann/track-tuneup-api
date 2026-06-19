@@ -131,6 +131,7 @@ export default function App() {
             filename={diagnostics.file.name}
             onCorrect={handleCorrect}
             onReset={handleReset}
+            disabled={isLoading}
           />
           {isLoading && <Spinner label={loadingStep!} />}
           {error && (

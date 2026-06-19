@@ -77,8 +77,8 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
       <p className="text-xs text-faint font-mono">{statusCfg.detail}</p>
 
       {/* Comparison table */}
-      <div className="rounded-lg border border-muted overflow-hidden">
-        <table className="w-full">
+      <div className="rounded-lg border border-muted overflow-x-auto">
+        <table className="w-full min-w-[34rem]">
           <thead>
             <tr className="bg-surface border-b border-muted">
               <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
