@@ -23,7 +23,11 @@ interface ResultsState {
 
 function Spinner({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-muted bg-surface">
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center gap-3 px-4 py-3 rounded-lg border border-muted bg-surface"
+    >
       <span
         className="w-3.5 h-3.5 rounded-full border-2 border-brass border-t-transparent animate-spin shrink-0"
         aria-hidden
@@ -118,7 +122,7 @@ export default function App() {
           <AudioUploader onSubmit={handleUpload} disabled={isLoading} />
           {isLoading && <Spinner label={loadingStep!} />}
           {error && (
-            <p className="text-bad text-sm font-mono px-1">{error}</p>
+            <p role="alert" className="text-bad text-sm font-mono px-1">{error}</p>
           )}
         </div>
       )}
@@ -135,7 +139,7 @@ export default function App() {
           />
           {isLoading && <Spinner label={loadingStep!} />}
           {error && (
-            <p className="text-bad text-sm font-mono px-1">{error}</p>
+            <p role="alert" className="text-bad text-sm font-mono px-1">{error}</p>
           )}
         </div>
       )}

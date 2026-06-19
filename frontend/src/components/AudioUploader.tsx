@@ -61,7 +61,14 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
 
       {/* Drop zone */}
       <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-label={file ? `Arquivo selecionado: ${file.name}. Clique para trocar.` : 'Arraste ou clique para selecionar um arquivo de áudio'}
         onClick={() => !disabled && inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (disabled) return
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current?.click() }
+        }}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
