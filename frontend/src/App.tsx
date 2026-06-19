@@ -20,6 +20,8 @@ interface ResultsState {
   downloadUrl: string
   preset: string
   file: File
+  correctedBlob: Blob
+  correctedBuffer: AudioBuffer
 }
 
 const STEPS: { id: Screen; label: string }[] = [
@@ -134,7 +136,7 @@ export default function App() {
       const downloadUrl  = URL.createObjectURL(blob)
 
       if (previousUrl) URL.revokeObjectURL(previousUrl)
-      setResults({ beforeMetrics, afterMetrics, downloadUrl, preset, file })
+      setResults({ beforeMetrics, afterMetrics, downloadUrl, preset, file, correctedBlob: blob, correctedBuffer: correctedAudioBuffer })
       setScreen('results')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro inesperado.')
@@ -206,6 +208,9 @@ export default function App() {
             downloadUrl={results.downloadUrl}
             preset={results.preset}
             filename={results.file.name}
+            originalFile={results.file}
+            correctedBlob={results.correctedBlob}
+            correctedBuffer={results.correctedBuffer}
             onReset={handleReset}
             onRetryPreset={handleRetryPreset}
             disabled={isLoading}

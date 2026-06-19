@@ -1,5 +1,6 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
 import { PRESETS, PRESET_LABELS, ROWS, getTarget, fmt } from '../lib/presets'
+import { ABComparePlayer } from './ABComparePlayer'
 
 function distFromTarget(value: number, target: number, lowerIsBetter: boolean): number {
   return lowerIsBetter ? value - target : Math.abs(value - target)
@@ -59,6 +60,9 @@ interface Props {
   downloadUrl: string
   preset: string
   filename: string
+  originalFile: File
+  correctedBlob: Blob
+  correctedBuffer: AudioBuffer
   onReset: () => void
   onRetryPreset: (preset: string) => void
   disabled?: boolean
@@ -70,7 +74,9 @@ function downloadName(original: string, preset: string): string {
 }
 
 export function AnalysisResults({
-  beforeMetrics, afterMetrics, downloadUrl, preset, filename, onReset, onRetryPreset, disabled = false,
+  beforeMetrics, afterMetrics, downloadUrl, preset, filename,
+  originalFile, correctedBlob, correctedBuffer,
+  onReset, onRetryPreset, disabled = false,
 }: Props) {
   const cfg         = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
@@ -92,6 +98,15 @@ export function AnalysisResults({
       </div>
 
       <p className="text-xs text-dim font-mono">{statusCfg.detail}</p>
+
+      {/* A/B compare player */}
+      <ABComparePlayer
+        originalFile={originalFile}
+        correctedBlob={correctedBlob}
+        correctedBuffer={correctedBuffer}
+        originalLufs={beforeMetrics.integrated_lufs}
+        correctedLufs={afterMetrics.integrated_lufs}
+      />
 
       {/* Comparison table */}
       <div className="rounded-lg border border-muted overflow-x-auto">
