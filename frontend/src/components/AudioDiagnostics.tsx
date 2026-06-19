@@ -1,59 +1,42 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt, MetricRow } from '../lib/presets'
 
-const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_min: number; lra_max: number }> = {
-  spotify:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  apple_music: { integrated_lufs: -16.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  youtube:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  club:        { integrated_lufs: -7.5,  true_peak: -0.3, lra_min: 4,  lra_max: 10 },
-  radio:       { integrated_lufs: -23.0, true_peak: -3.0, lra_min: 4,  lra_max: 15 },
-  cd_master:   { integrated_lufs: -10.5, true_peak:  0.0, lra_min: 6,  lra_max: 14 },
+type Status = 'ok' | 'warn' | 'bad'
+
+function valueStatus(value: number, target: number, row: MetricRow): Status {
+  const d = deviation(value, target, row.lowerIsBetter ?? false)
+  if (d <= row.warnAt) return 'ok'
+  if (d <= row.badAt) return 'warn'
+  return 'bad'
 }
 
-const PRESET_LABELS: Record<string, string> = {
-  spotify: 'Spotify', apple_music: 'Apple Music', youtube: 'YouTube',
-  club: 'Club / DJ', radio: 'Rádio', cd_master: 'CD Master',
-}
+// Símbolo redundante à cor (WCAG 1.4.1 — não depender só de cor)
+const STATUS_GLYPH: Record<Status, string> = { ok: '✓', warn: '!', bad: '✗' }
+const STATUS_COLOR: Record<Status, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' }
 
-interface Row {
-  label: string
-  key: keyof AudioMetrics
-  unit: string
-  target: number | null
-  lowerIsBetter?: boolean
-}
+function buildVerdict(metrics: AudioMetrics, preset: string): string {
+  const cfg = PRESETS[preset]
+  const label = PRESET_LABELS[preset] ?? preset
+  const lufsDiff = metrics.integrated_lufs - cfg.integrated_lufs
+  const peakOk = metrics.true_peak <= cfg.true_peak
 
-const ROWS: Row[] = [
-  { label: 'Volume integrado',      key: 'integrated_lufs',   unit: 'LUFS', target: null },
-  { label: 'Volume curto prazo',    key: 'short_term_lufs',   unit: 'LUFS', target: null },
-  { label: 'Pico verdadeiro',       key: 'true_peak',         unit: 'dBTP', target: null, lowerIsBetter: true },
-  { label: 'Pico de amostra',       key: 'sample_peak',       unit: 'dBFS', target: -0.5, lowerIsBetter: true },
-  { label: 'Faixa dinâmica',        key: 'dynamic_range',     unit: 'dB',   target: 9.0 },
-  { label: 'Variação de loudness',  key: 'loudness_range',    unit: 'LU',   target: null },
-  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0,  lowerIsBetter: true },
-  { label: 'Correlação de fase',    key: 'phase_correlation', unit: '',     target: 1.0 },
-]
+  if (Math.abs(lufsDiff) <= 1.0 && peakOk) {
+    return `Sua faixa já está dentro do padrão ${label}. Você pode corrigir assim mesmo para normalizar o arquivo.`
+  }
 
-function getTarget(row: Row, cfg: typeof PRESETS[string]): number {
-  if (row.target !== null) return row.target
-  if (row.key === 'integrated_lufs' || row.key === 'short_term_lufs') return cfg.integrated_lufs
-  if (row.key === 'true_peak') return cfg.true_peak
-  if (row.key === 'loudness_range') return (cfg.lra_min + cfg.lra_max) / 2
-  return 0
-}
+  const parts: string[] = []
 
-function deviation(value: number, target: number, lowerIsBetter: boolean): number {
-  return lowerIsBetter ? value - target : Math.abs(value - target)
-}
+  if (Math.abs(lufsDiff) > 1.0) {
+    const dir = lufsDiff > 0 ? 'acima' : 'abaixo'
+    parts.push(`O volume está ${Math.abs(lufsDiff).toFixed(1)} LUFS ${dir} do ideal para ${label}`)
+  }
 
-function valueColor(value: number, target: number, lowerIsBetter: boolean): string {
-  const d = deviation(value, target, lowerIsBetter)
-  if (d <= 1.0) return 'text-ok'
-  if (d <= 3.0) return 'text-warn'
-  return 'text-bad'
-}
+  if (!peakOk) {
+    const excess = (metrics.true_peak - cfg.true_peak).toFixed(1)
+    parts.push(`o pico verdadeiro está ${excess} dB acima do limite`)
+  }
 
-function fmt(value: number, unit: string): string {
-  return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(2)
+  return parts.join(' e ') + '. Vamos corrigir.'
 }
 
 interface Props {
@@ -62,16 +45,41 @@ interface Props {
   filename: string
   onCorrect: () => void
   onReset: () => void
+  disabled?: boolean
 }
 
-export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset }: Props) {
+export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset, disabled = false }: Props) {
   const cfg = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
 
   const issues = ROWS.filter((row) => {
-    const d = deviation(metrics[row.key] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
-    return d > 1.0
+    const d = deviation(metrics[row.key as keyof AudioMetrics] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
+    return d > row.warnAt
   }).length
+
+  const verdict = buildVerdict(metrics, preset)
+
+  const criticalRows = ROWS.filter((r) => r.group === 'critical')
+  const infoRows = ROWS.filter((r) => r.group === 'info')
+
+  const renderRow = (row: typeof ROWS[number]) => {
+    const target = getTarget(row, cfg)
+    const value = metrics[row.key as keyof AudioMetrics] as number
+    const status = valueStatus(value, target, row)
+    const targetLabel = row.key === 'loudness_range'
+      ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
+      : fmt(target, row.unit)
+    return (
+      <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
+        <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
+        <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${STATUS_COLOR[status]}`}>
+          <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{STATUS_GLYPH[status]}</span>
+          {fmt(value, row.unit)}
+        </td>
+        <td className="px-4 py-3 text-right font-mono text-sm text-dim">{targetLabel}</td>
+      </tr>
+    )
+  }
 
   return (
     <div className="w-full max-w-2xl space-y-6">
@@ -94,11 +102,14 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
         </div>
       </div>
 
-      <p className="text-xs text-faint font-mono truncate">{filename}</p>
+      <p className="text-xs text-dim font-mono truncate">{filename}</p>
 
-      {/* Metrics table */}
-      <div className="rounded-lg border border-muted overflow-hidden">
-        <table className="w-full">
+      {/* Human-readable verdict */}
+      <p className="text-sm text-dim leading-relaxed">{verdict}</p>
+
+      {/* Métricas críticas — LUFS e true peak, o que realmente importa */}
+      <div className="rounded-lg border border-muted overflow-x-auto">
+        <table className="w-full min-w-[28rem]">
           <thead>
             <tr className="bg-surface border-b border-muted">
               <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
@@ -107,44 +118,46 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
             </tr>
           </thead>
           <tbody className="divide-y divide-muted">
-            {ROWS.map((row) => {
-              const target = getTarget(row, cfg)
-              const value = metrics[row.key] as number
-              const color = valueColor(value, target, row.lowerIsBetter ?? false)
-              return (
-                <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
-                  <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>
-                    {fmt(value, row.unit)}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">
-                    {fmt(target, row.unit)}
-                  </td>
-                </tr>
-              )
-            })}
+            {criticalRows.map(renderRow)}
           </tbody>
         </table>
       </div>
 
+      {/* Métricas informativas — recolhíveis */}
+      <details className="rounded-lg border border-muted overflow-hidden group">
+        <summary className="px-4 py-3 bg-surface text-xs font-medium text-dim uppercase tracking-widest cursor-pointer select-none hover:text-fg list-none flex items-center justify-between">
+          <span>Detalhes técnicos ({infoRows.length})</span>
+          <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+        </summary>
+        <div className="overflow-x-auto border-t border-muted">
+          <table className="w-full min-w-[28rem]">
+            <tbody className="divide-y divide-muted">
+              {infoRows.map(renderRow)}
+            </tbody>
+          </table>
+        </div>
+      </details>
+
       {/* Legend */}
-      <div className="flex gap-6 text-xs font-mono text-faint">
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-ok inline-block" />ok</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" />atenção</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" />fora do alvo</span>
+      <div className="flex gap-6 text-xs font-mono text-dim">
+        <span className="flex items-center gap-1.5"><span className="text-ok" aria-hidden>✓</span>ok</span>
+        <span className="flex items-center gap-1.5"><span className="text-warn" aria-hidden>!</span>atenção</span>
+        <span className="flex items-center gap-1.5"><span className="text-bad" aria-hidden>✗</span>fora do alvo</span>
       </div>
 
       {/* Actions */}
       <div className="flex gap-3 pt-2">
         <button
           onClick={onCorrect}
-          className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
+          disabled={disabled}
+          className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
-          Aplicar correção
+          Corrigir volume e picos →
         </button>
         <button
           onClick={onReset}
-          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors"
+          disabled={disabled}
+          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           Trocar arquivo
         </button>

@@ -1,59 +1,28 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
-
-const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_min: number; lra_max: number }> = {
-  spotify:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  apple_music: { integrated_lufs: -16.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  youtube:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  club:        { integrated_lufs: -7.5,  true_peak: -0.3, lra_min: 4,  lra_max: 10 },
-  radio:       { integrated_lufs: -23.0, true_peak: -3.0, lra_min: 4,  lra_max: 15 },
-  cd_master:   { integrated_lufs: -10.5, true_peak:  0.0, lra_min: 6,  lra_max: 14 },
-}
-
-const PRESET_LABELS: Record<string, string> = {
-  spotify: 'Spotify', apple_music: 'Apple Music', youtube: 'YouTube',
-  club: 'Club / DJ', radio: 'Rádio', cd_master: 'CD Master',
-}
-
-interface Row {
-  label: string
-  key: keyof AudioMetrics
-  unit: string
-  target: number | null
-  lowerIsBetter?: boolean
-}
-
-const ROWS: Row[] = [
-  { label: 'Volume integrado',      key: 'integrated_lufs',   unit: 'LUFS', target: null },
-  { label: 'Volume curto prazo',    key: 'short_term_lufs',   unit: 'LUFS', target: null },
-  { label: 'Pico verdadeiro',       key: 'true_peak',         unit: 'dBTP', target: null, lowerIsBetter: true },
-  { label: 'Pico de amostra',       key: 'sample_peak',       unit: 'dBFS', target: -0.5, lowerIsBetter: true },
-  { label: 'Faixa dinâmica',        key: 'dynamic_range',     unit: 'dB',   target: 9.0 },
-  { label: 'Variação de loudness',  key: 'loudness_range',    unit: 'LU',   target: null },
-  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0,  lowerIsBetter: true },
-  { label: 'Correlação de fase',    key: 'phase_correlation', unit: '',     target: 1.0 },
-]
-
-function getTarget(row: Row, cfg: typeof PRESETS[string]): number {
-  if (row.target !== null) return row.target
-  if (row.key === 'integrated_lufs' || row.key === 'short_term_lufs') return cfg.integrated_lufs
-  if (row.key === 'true_peak') return cfg.true_peak
-  if (row.key === 'loudness_range') return (cfg.lra_min + cfg.lra_max) / 2
-  return 0
-}
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, fmt } from '../lib/presets'
 
 function distFromTarget(value: number, target: number, lowerIsBetter: boolean): number {
   return lowerIsBetter ? value - target : Math.abs(value - target)
 }
 
-function afterColor(before: number, after: number, target: number, lowerIsBetter = false): string {
+type Change = 'better' | 'worse' | 'same'
+
+function changeOf(before: number, after: number, target: number, lowerIsBetter = false): Change {
   const dBefore = distFromTarget(before, target, lowerIsBetter)
   const dAfter  = distFromTarget(after,  target, lowerIsBetter)
-  if (Math.abs(dAfter - dBefore) < 0.05) return 'text-faint'
-  return dAfter < dBefore ? 'text-ok' : 'text-bad'
+  if (Math.abs(dAfter - dBefore) < 0.05) return 'same'
+  return dAfter < dBefore ? 'better' : 'worse'
 }
 
-function fmt(value: number, unit: string): string {
-  return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(2)
+// Símbolo redundante à cor (WCAG 1.4.1)
+const CHANGE_GLYPH: Record<Change, string> = { better: '✓', worse: '✗', same: '·' }
+const CHANGE_COLOR: Record<Change, string> = { better: 'text-ok', worse: 'text-bad', same: 'text-dim' }
+
+function fmtDelta(before: number, after: number, unit: string): string {
+  const d = after - before
+  if (Math.abs(d) < 0.05) return '—'
+  const sign = d > 0 ? '+' : ''
+  return unit ? `${sign}${d.toFixed(1)} ${unit}` : `${sign}${d.toFixed(2)}`
 }
 
 type ConfirmationStatus = 'confirmed' | 'close' | 'off-target'
@@ -89,14 +58,25 @@ interface Props {
   afterMetrics: AudioMetrics
   downloadUrl: string
   preset: string
+  filename: string
   onReset: () => void
+  onRetryPreset: (preset: string) => void
+  disabled?: boolean
 }
 
-export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, preset, onReset }: Props) {
+function downloadName(original: string, preset: string): string {
+  const base = original.replace(/\.[^.]+$/, '') || 'faixa'
+  return `${base}_${preset}.wav`
+}
+
+export function AnalysisResults({
+  beforeMetrics, afterMetrics, downloadUrl, preset, filename, onReset, onRetryPreset, disabled = false,
+}: Props) {
   const cfg         = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
   const status      = getStatus(afterMetrics, cfg)
   const statusCfg   = STATUS_CONFIG[status]
+  const otherPresets = Object.keys(PRESETS).filter((p) => p !== preset)
 
   return (
     <div className="w-full max-w-2xl space-y-6">
@@ -111,31 +91,39 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
         </span>
       </div>
 
-      <p className="text-xs text-faint font-mono">{statusCfg.detail}</p>
+      <p className="text-xs text-dim font-mono">{statusCfg.detail}</p>
 
       {/* Comparison table */}
-      <div className="rounded-lg border border-muted overflow-hidden">
-        <table className="w-full">
+      <div className="rounded-lg border border-muted overflow-x-auto">
+        <table className="w-full min-w-[34rem]">
           <thead>
             <tr className="bg-surface border-b border-muted">
               <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Antes</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Depois</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Δ</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Alvo</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-muted">
             {ROWS.map((row) => {
               const target = getTarget(row, cfg)
-              const before = beforeMetrics[row.key] as number
-              const after  = afterMetrics[row.key]  as number
-              const color  = afterColor(before, after, target, row.lowerIsBetter)
+              const before = beforeMetrics[row.key as keyof AudioMetrics] as number
+              const after  = afterMetrics[row.key as keyof AudioMetrics]  as number
+              const change = changeOf(before, after, target, row.lowerIsBetter)
+              const targetLabel = row.key === 'loudness_range'
+                ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
+                : fmt(target, row.unit)
               return (
                 <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
                   <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{fmt(before, row.unit)}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>{fmt(after, row.unit)}</td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{fmt(target, row.unit)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">{fmt(before, row.unit)}</td>
+                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${CHANGE_COLOR[change]}`}>
+                    <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{CHANGE_GLYPH[change]}</span>
+                    {fmt(after, row.unit)}
+                  </td>
+                  <td className={`px-4 py-3 text-right font-mono text-xs ${CHANGE_COLOR[change]}`}>{fmtDelta(before, after, row.unit)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">{targetLabel}</td>
                 </tr>
               )
             })}
@@ -144,27 +132,45 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
       </div>
 
       {/* Legend */}
-      <div className="flex gap-6 text-xs font-mono text-faint">
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-ok inline-block" />melhorou</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" />piorou</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-faint inline-block" />sem alteração</span>
+      <div className="flex gap-6 text-xs font-mono text-dim">
+        <span className="flex items-center gap-1.5"><span className="text-ok" aria-hidden>✓</span>melhorou</span>
+        <span className="flex items-center gap-1.5"><span className="text-bad" aria-hidden>✗</span>piorou</span>
+        <span className="flex items-center gap-1.5"><span className="text-dim" aria-hidden>·</span>sem alteração</span>
       </div>
 
       {/* Actions */}
       <div className="flex gap-3 pt-2">
         <a
           href={downloadUrl}
-          download="corrected.wav"
+          download={downloadName(filename, preset)}
           className="flex-1 text-center py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
         >
           Baixar faixa corrigida
         </a>
         <button
           onClick={onReset}
-          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors"
+          disabled={disabled}
+          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           Nova análise
         </button>
+      </div>
+
+      {/* Testar outro preset com o mesmo arquivo */}
+      <div className="space-y-2 pt-2">
+        <p className="text-xs text-dim font-mono">Testar outro destino com o mesmo arquivo:</p>
+        <div className="grid grid-cols-3 gap-2">
+          {otherPresets.map((p) => (
+            <button
+              key={p}
+              onClick={() => onRetryPreset(p)}
+              disabled={disabled}
+              className="px-3 py-2 rounded text-sm font-medium border bg-surface border-muted text-dim hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            >
+              {PRESET_LABELS[p] ?? p}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
