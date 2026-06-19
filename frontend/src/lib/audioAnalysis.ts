@@ -38,13 +38,25 @@ export function analyzeAudio(audioBuffer: AudioBuffer): AudioMetrics {
   const stRms = Math.sqrt(stSumSq / window)
   const short_term_lufs = stRms > 0 ? 20 * Math.log10(stRms) - 0.691 : -70
 
-  // True peak
+  // Sample peak (linear max)
   let maxAbs = 0
   for (let i = 0; i < length; i++) {
     maxAbs = Math.max(maxAbs, Math.abs(left[i]), Math.abs(right[i]))
   }
-  const true_peak = maxAbs > 0 ? 20 * Math.log10(maxAbs) : -120
-  const sample_peak = true_peak
+  const sample_peak = maxAbs > 0 ? 20 * Math.log10(maxAbs) : -120
+
+  // True peak — 4× linear interpolation to approximate inter-sample peaks
+  const oversample = 4
+  let maxInterSample = maxAbs
+  for (let i = 1; i < length; i++) {
+    for (let k = 1; k < oversample; k++) {
+      const t = k / oversample
+      const lInterp = left[i - 1] + t * (left[i] - left[i - 1])
+      const rInterp = right[i - 1] + t * (right[i] - right[i - 1])
+      maxInterSample = Math.max(maxInterSample, Math.abs(lInterp), Math.abs(rInterp))
+    }
+  }
+  const true_peak = maxInterSample > 0 ? 20 * Math.log10(maxInterSample) : -120
 
   // Dynamic range
   const dynamic_range = true_peak - integrated_lufs

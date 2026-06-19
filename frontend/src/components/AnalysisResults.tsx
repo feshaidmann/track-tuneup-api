@@ -1,45 +1,5 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
-
-const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_min: number; lra_max: number }> = {
-  spotify:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  apple_music: { integrated_lufs: -16.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  youtube:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  club:        { integrated_lufs: -7.5,  true_peak: -0.3, lra_min: 4,  lra_max: 10 },
-  radio:       { integrated_lufs: -23.0, true_peak: -3.0, lra_min: 4,  lra_max: 15 },
-  cd_master:   { integrated_lufs: -10.5, true_peak:  0.0, lra_min: 6,  lra_max: 14 },
-}
-
-const PRESET_LABELS: Record<string, string> = {
-  spotify: 'Spotify', apple_music: 'Apple Music', youtube: 'YouTube',
-  club: 'Club / DJ', radio: 'Rádio', cd_master: 'CD Master',
-}
-
-interface Row {
-  label: string
-  key: keyof AudioMetrics
-  unit: string
-  target: number | null
-  lowerIsBetter?: boolean
-}
-
-const ROWS: Row[] = [
-  { label: 'Volume integrado',      key: 'integrated_lufs',   unit: 'LUFS', target: null },
-  { label: 'Volume curto prazo',    key: 'short_term_lufs',   unit: 'LUFS', target: null },
-  { label: 'Pico verdadeiro',       key: 'true_peak',         unit: 'dBTP', target: null, lowerIsBetter: true },
-  { label: 'Pico de amostra',       key: 'sample_peak',       unit: 'dBFS', target: -0.5, lowerIsBetter: true },
-  { label: 'Faixa dinâmica',        key: 'dynamic_range',     unit: 'dB',   target: 9.0 },
-  { label: 'Variação de loudness',  key: 'loudness_range',    unit: 'LU',   target: null },
-  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0,  lowerIsBetter: true },
-  { label: 'Correlação de fase',    key: 'phase_correlation', unit: '',     target: 1.0 },
-]
-
-function getTarget(row: Row, cfg: typeof PRESETS[string]): number {
-  if (row.target !== null) return row.target
-  if (row.key === 'integrated_lufs' || row.key === 'short_term_lufs') return cfg.integrated_lufs
-  if (row.key === 'true_peak') return cfg.true_peak
-  if (row.key === 'loudness_range') return (cfg.lra_min + cfg.lra_max) / 2
-  return 0
-}
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt } from '../lib/presets'
 
 function distFromTarget(value: number, target: number, lowerIsBetter: boolean): number {
   return lowerIsBetter ? value - target : Math.abs(value - target)
@@ -52,8 +12,11 @@ function afterColor(before: number, after: number, target: number, lowerIsBetter
   return dAfter < dBefore ? 'text-ok' : 'text-bad'
 }
 
-function fmt(value: number, unit: string): string {
-  return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(2)
+function fmtDelta(before: number, after: number, unit: string): string {
+  const d = after - before
+  if (Math.abs(d) < 0.05) return '—'
+  const sign = d > 0 ? '+' : ''
+  return unit ? `${sign}${d.toFixed(1)} ${unit}` : `${sign}${d.toFixed(2)}`
 }
 
 type ConfirmationStatus = 'confirmed' | 'close' | 'off-target'
@@ -121,21 +84,32 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
               <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Antes</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Depois</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Δ</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Alvo</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-muted">
             {ROWS.map((row) => {
               const target = getTarget(row, cfg)
-              const before = beforeMetrics[row.key] as number
-              const after  = afterMetrics[row.key]  as number
+              const before = beforeMetrics[row.key as keyof AudioMetrics] as number
+              const after  = afterMetrics[row.key as keyof AudioMetrics]  as number
               const color  = afterColor(before, after, target, row.lowerIsBetter)
+              const targetLabel = row.key === 'loudness_range'
+                ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
+                : fmt(target, row.unit)
+              const deltaColor = (() => {
+                const d = distFromTarget(after, target, row.lowerIsBetter ?? false)
+                const db = distFromTarget(before, target, row.lowerIsBetter ?? false)
+                if (Math.abs(d - db) < 0.05) return 'text-faint'
+                return d < db ? 'text-ok' : 'text-bad'
+              })()
               return (
                 <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
                   <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
                   <td className="px-4 py-3 text-right font-mono text-sm text-faint">{fmt(before, row.unit)}</td>
                   <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>{fmt(after, row.unit)}</td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{fmt(target, row.unit)}</td>
+                  <td className={`px-4 py-3 text-right font-mono text-xs ${deltaColor}`}>{fmtDelta(before, after, row.unit)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{targetLabel}</td>
                 </tr>
               )
             })}

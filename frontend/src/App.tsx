@@ -42,8 +42,8 @@ export default function App() {
 
   async function handleUpload(file: File, preset: string) {
     setError(null)
+    const ctx = new AudioContext()
     try {
-      const ctx = new AudioContext()
       setLoadingStep('Lendo o arquivo...')
       const raw = await file.arrayBuffer()
       setLoadingStep('Analisando...')
@@ -55,6 +55,7 @@ export default function App() {
       setError('Não foi possível analisar o arquivo. Verifique o formato.')
     } finally {
       setLoadingStep(null)
+      ctx.close()
     }
   }
 
@@ -63,8 +64,8 @@ export default function App() {
     const { file, preset, metrics: beforeMetrics } = diagnostics
     setError(null)
 
+    const ctx = new AudioContext()
     try {
-      const ctx = new AudioContext()
 
       setLoadingStep('Aplicando correções...')
       const formData = new FormData()
@@ -96,6 +97,7 @@ export default function App() {
       setError(err instanceof Error ? err.message : 'Erro inesperado.')
     } finally {
       setLoadingStep(null)
+      ctx.close()
     }
   }
 

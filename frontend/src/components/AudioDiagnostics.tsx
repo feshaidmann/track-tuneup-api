@@ -1,49 +1,5 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
-
-const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_min: number; lra_max: number }> = {
-  spotify:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  apple_music: { integrated_lufs: -16.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  youtube:     { integrated_lufs: -14.0, true_peak: -1.0, lra_min: 6,  lra_max: 18 },
-  club:        { integrated_lufs: -7.5,  true_peak: -0.3, lra_min: 4,  lra_max: 10 },
-  radio:       { integrated_lufs: -23.0, true_peak: -3.0, lra_min: 4,  lra_max: 15 },
-  cd_master:   { integrated_lufs: -10.5, true_peak:  0.0, lra_min: 6,  lra_max: 14 },
-}
-
-const PRESET_LABELS: Record<string, string> = {
-  spotify: 'Spotify', apple_music: 'Apple Music', youtube: 'YouTube',
-  club: 'Club / DJ', radio: 'Rádio', cd_master: 'CD Master',
-}
-
-interface Row {
-  label: string
-  key: keyof AudioMetrics
-  unit: string
-  target: number | null
-  lowerIsBetter?: boolean
-}
-
-const ROWS: Row[] = [
-  { label: 'Volume integrado',      key: 'integrated_lufs',   unit: 'LUFS', target: null },
-  { label: 'Volume curto prazo',    key: 'short_term_lufs',   unit: 'LUFS', target: null },
-  { label: 'Pico verdadeiro',       key: 'true_peak',         unit: 'dBTP', target: null, lowerIsBetter: true },
-  { label: 'Pico de amostra',       key: 'sample_peak',       unit: 'dBFS', target: -0.5, lowerIsBetter: true },
-  { label: 'Faixa dinâmica',        key: 'dynamic_range',     unit: 'dB',   target: 9.0 },
-  { label: 'Variação de loudness',  key: 'loudness_range',    unit: 'LU',   target: null },
-  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0,  lowerIsBetter: true },
-  { label: 'Correlação de fase',    key: 'phase_correlation', unit: '',     target: 1.0 },
-]
-
-function getTarget(row: Row, cfg: typeof PRESETS[string]): number {
-  if (row.target !== null) return row.target
-  if (row.key === 'integrated_lufs' || row.key === 'short_term_lufs') return cfg.integrated_lufs
-  if (row.key === 'true_peak') return cfg.true_peak
-  if (row.key === 'loudness_range') return (cfg.lra_min + cfg.lra_max) / 2
-  return 0
-}
-
-function deviation(value: number, target: number, lowerIsBetter: boolean): number {
-  return lowerIsBetter ? value - target : Math.abs(value - target)
-}
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt } from '../lib/presets'
 
 function valueColor(value: number, target: number, lowerIsBetter: boolean): string {
   const d = deviation(value, target, lowerIsBetter)
@@ -52,8 +8,29 @@ function valueColor(value: number, target: number, lowerIsBetter: boolean): stri
   return 'text-bad'
 }
 
-function fmt(value: number, unit: string): string {
-  return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(2)
+function buildVerdict(metrics: AudioMetrics, preset: string): string {
+  const cfg = PRESETS[preset]
+  const label = PRESET_LABELS[preset] ?? preset
+  const lufsDiff = metrics.integrated_lufs - cfg.integrated_lufs
+  const peakOk = metrics.true_peak <= cfg.true_peak
+
+  if (Math.abs(lufsDiff) <= 1.0 && peakOk) {
+    return `Sua faixa já está dentro do padrão ${label}. Você pode corrigir assim mesmo para normalizar o arquivo.`
+  }
+
+  const parts: string[] = []
+
+  if (Math.abs(lufsDiff) > 1.0) {
+    const dir = lufsDiff > 0 ? 'acima' : 'abaixo'
+    parts.push(`O volume está ${Math.abs(lufsDiff).toFixed(1)} LUFS ${dir} do ideal para ${label}`)
+  }
+
+  if (!peakOk) {
+    const excess = (metrics.true_peak - cfg.true_peak).toFixed(1)
+    parts.push(`o pico verdadeiro está ${excess} dB acima do limite`)
+  }
+
+  return parts.join(' e ') + '. Vamos corrigir.'
 }
 
 interface Props {
@@ -69,9 +46,11 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
   const presetLabel = PRESET_LABELS[preset] ?? preset
 
   const issues = ROWS.filter((row) => {
-    const d = deviation(metrics[row.key] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
+    const d = deviation(metrics[row.key as keyof AudioMetrics] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
     return d > 1.0
   }).length
+
+  const verdict = buildVerdict(metrics, preset)
 
   return (
     <div className="w-full max-w-2xl space-y-6">
@@ -96,6 +75,9 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
 
       <p className="text-xs text-faint font-mono truncate">{filename}</p>
 
+      {/* Human-readable verdict */}
+      <p className="text-sm text-dim leading-relaxed">{verdict}</p>
+
       {/* Metrics table */}
       <div className="rounded-lg border border-muted overflow-hidden">
         <table className="w-full">
@@ -109,8 +91,11 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
           <tbody className="divide-y divide-muted">
             {ROWS.map((row) => {
               const target = getTarget(row, cfg)
-              const value = metrics[row.key] as number
+              const value = metrics[row.key as keyof AudioMetrics] as number
               const color = valueColor(value, target, row.lowerIsBetter ?? false)
+              const targetLabel = row.key === 'loudness_range'
+                ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
+                : fmt(target, row.unit)
               return (
                 <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
                   <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
@@ -118,7 +103,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
                     {fmt(value, row.unit)}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-sm text-faint">
-                    {fmt(target, row.unit)}
+                    {targetLabel}
                   </td>
                 </tr>
               )
@@ -140,7 +125,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
           onClick={onCorrect}
           className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
         >
-          Aplicar correção
+          Corrigir volume e picos →
         </button>
         <button
           onClick={onReset}
