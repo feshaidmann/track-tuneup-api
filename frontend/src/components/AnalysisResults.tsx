@@ -1,16 +1,22 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
-import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt } from '../lib/presets'
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, fmt } from '../lib/presets'
 
 function distFromTarget(value: number, target: number, lowerIsBetter: boolean): number {
   return lowerIsBetter ? value - target : Math.abs(value - target)
 }
 
-function afterColor(before: number, after: number, target: number, lowerIsBetter = false): string {
+type Change = 'better' | 'worse' | 'same'
+
+function changeOf(before: number, after: number, target: number, lowerIsBetter = false): Change {
   const dBefore = distFromTarget(before, target, lowerIsBetter)
   const dAfter  = distFromTarget(after,  target, lowerIsBetter)
-  if (Math.abs(dAfter - dBefore) < 0.05) return 'text-faint'
-  return dAfter < dBefore ? 'text-ok' : 'text-bad'
+  if (Math.abs(dAfter - dBefore) < 0.05) return 'same'
+  return dAfter < dBefore ? 'better' : 'worse'
 }
+
+// Símbolo redundante à cor (WCAG 1.4.1)
+const CHANGE_GLYPH: Record<Change, string> = { better: '✓', worse: '✗', same: '·' }
+const CHANGE_COLOR: Record<Change, string> = { better: 'text-ok', worse: 'text-bad', same: 'text-dim' }
 
 function fmtDelta(before: number, after: number, unit: string): string {
   const d = after - before
@@ -74,7 +80,7 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
         </span>
       </div>
 
-      <p className="text-xs text-faint font-mono">{statusCfg.detail}</p>
+      <p className="text-xs text-dim font-mono">{statusCfg.detail}</p>
 
       {/* Comparison table */}
       <div className="rounded-lg border border-muted overflow-x-auto">
@@ -93,23 +99,20 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
               const target = getTarget(row, cfg)
               const before = beforeMetrics[row.key as keyof AudioMetrics] as number
               const after  = afterMetrics[row.key as keyof AudioMetrics]  as number
-              const color  = afterColor(before, after, target, row.lowerIsBetter)
+              const change = changeOf(before, after, target, row.lowerIsBetter)
               const targetLabel = row.key === 'loudness_range'
                 ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
                 : fmt(target, row.unit)
-              const deltaColor = (() => {
-                const d = distFromTarget(after, target, row.lowerIsBetter ?? false)
-                const db = distFromTarget(before, target, row.lowerIsBetter ?? false)
-                if (Math.abs(d - db) < 0.05) return 'text-faint'
-                return d < db ? 'text-ok' : 'text-bad'
-              })()
               return (
                 <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
                   <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{fmt(before, row.unit)}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>{fmt(after, row.unit)}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-xs ${deltaColor}`}>{fmtDelta(before, after, row.unit)}</td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">{targetLabel}</td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">{fmt(before, row.unit)}</td>
+                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${CHANGE_COLOR[change]}`}>
+                    <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{CHANGE_GLYPH[change]}</span>
+                    {fmt(after, row.unit)}
+                  </td>
+                  <td className={`px-4 py-3 text-right font-mono text-xs ${CHANGE_COLOR[change]}`}>{fmtDelta(before, after, row.unit)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">{targetLabel}</td>
                 </tr>
               )
             })}
@@ -118,10 +121,10 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
       </div>
 
       {/* Legend */}
-      <div className="flex gap-6 text-xs font-mono text-faint">
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-ok inline-block" />melhorou</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" />piorou</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-faint inline-block" />sem alteração</span>
+      <div className="flex gap-6 text-xs font-mono text-dim">
+        <span className="flex items-center gap-1.5"><span className="text-ok" aria-hidden>✓</span>melhorou</span>
+        <span className="flex items-center gap-1.5"><span className="text-bad" aria-hidden>✗</span>piorou</span>
+        <span className="flex items-center gap-1.5"><span className="text-dim" aria-hidden>·</span>sem alteração</span>
       </div>
 
       {/* Actions */}

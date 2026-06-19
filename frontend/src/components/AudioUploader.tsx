@@ -77,7 +77,7 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
         ) : (
           <>
             <p className="text-fg text-sm font-medium">Arraste ou clique para selecionar</p>
-            <p className="text-faint text-xs font-mono">WAV · MP3 · FLAC · AIFF — até 200 MB</p>
+            <p className="text-dim text-xs font-mono">WAV · MP3 · FLAC · AIFF — até 200 MB</p>
           </>
         )}
         <input

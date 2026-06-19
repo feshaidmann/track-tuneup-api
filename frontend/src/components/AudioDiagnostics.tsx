@@ -1,12 +1,18 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
 import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt } from '../lib/presets'
 
-function valueColor(value: number, target: number, lowerIsBetter: boolean): string {
+type Status = 'ok' | 'warn' | 'bad'
+
+function valueStatus(value: number, target: number, lowerIsBetter: boolean): Status {
   const d = deviation(value, target, lowerIsBetter)
-  if (d <= 1.0) return 'text-ok'
-  if (d <= 3.0) return 'text-warn'
-  return 'text-bad'
+  if (d <= 1.0) return 'ok'
+  if (d <= 3.0) return 'warn'
+  return 'bad'
 }
+
+// Símbolo redundante à cor (WCAG 1.4.1 — não depender só de cor)
+const STATUS_GLYPH: Record<Status, string> = { ok: '✓', warn: '!', bad: '✗' }
+const STATUS_COLOR: Record<Status, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad' }
 
 function buildVerdict(metrics: AudioMetrics, preset: string): string {
   const cfg = PRESETS[preset]
@@ -74,7 +80,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
         </div>
       </div>
 
-      <p className="text-xs text-faint font-mono truncate">{filename}</p>
+      <p className="text-xs text-dim font-mono truncate">{filename}</p>
 
       {/* Human-readable verdict */}
       <p className="text-sm text-dim leading-relaxed">{verdict}</p>
@@ -93,17 +99,18 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
             {ROWS.map((row) => {
               const target = getTarget(row, cfg)
               const value = metrics[row.key as keyof AudioMetrics] as number
-              const color = valueColor(value, target, row.lowerIsBetter ?? false)
+              const status = valueStatus(value, target, row.lowerIsBetter ?? false)
               const targetLabel = row.key === 'loudness_range'
                 ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
                 : fmt(target, row.unit)
               return (
                 <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
                   <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>
+                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${STATUS_COLOR[status]}`}>
+                    <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{STATUS_GLYPH[status]}</span>
                     {fmt(value, row.unit)}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">
+                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">
                     {targetLabel}
                   </td>
                 </tr>
@@ -114,10 +121,10 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
       </div>
 
       {/* Legend */}
-      <div className="flex gap-6 text-xs font-mono text-faint">
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-ok inline-block" />ok</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" />atenção</span>
-        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" />fora do alvo</span>
+      <div className="flex gap-6 text-xs font-mono text-dim">
+        <span className="flex items-center gap-1.5"><span className="text-ok" aria-hidden>✓</span>ok</span>
+        <span className="flex items-center gap-1.5"><span className="text-warn" aria-hidden>!</span>atenção</span>
+        <span className="flex items-center gap-1.5"><span className="text-bad" aria-hidden>✗</span>fora do alvo</span>
       </div>
 
       {/* Actions */}
