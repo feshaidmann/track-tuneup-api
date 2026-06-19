@@ -52,10 +52,10 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-lg mx-auto space-y-6">
+    <form onSubmit={handleSubmit} className="w-full max-w-lg space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white mb-1">Track Tuneup</h1>
-        <p className="text-gray-400 text-sm">Análise e correção de áudio para streaming e masterização</p>
+        <h1 className="text-xl font-bold text-fg tracking-tight mb-1">Track Tuneup</h1>
+        <p className="text-sm text-dim">Análise e correção de loudness para streaming e masterização</p>
       </div>
 
       {/* Drop zone */}
@@ -64,19 +64,20 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
         onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        className={`relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-10 cursor-pointer transition-colors
-          ${dragOver ? 'border-emerald-500 bg-emerald-500/5' : 'border-gray-700 hover:border-gray-600 bg-gray-900/40'}
-          ${disabled ? 'pointer-events-none opacity-50' : ''}`}
+        className={[
+          'flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-12 cursor-pointer transition-colors',
+          dragOver
+            ? 'border-brass bg-brass-faint'
+            : 'border-muted hover:border-faint bg-surface',
+          disabled ? 'pointer-events-none opacity-40' : '',
+        ].join(' ')}
       >
-        <svg className="w-10 h-10 text-gray-500" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z" />
-        </svg>
         {file ? (
-          <p className="text-emerald-400 font-medium text-sm">{file.name}</p>
+          <p className="text-brass font-mono text-sm">{file.name}</p>
         ) : (
           <>
-            <p className="text-gray-300 font-medium">Arraste ou clique para selecionar</p>
-            <p className="text-gray-500 text-xs">WAV, MP3, FLAC, AIFF — até 200 MB</p>
+            <p className="text-fg text-sm font-medium">Arraste ou clique para selecionar</p>
+            <p className="text-faint text-xs font-mono">WAV · MP3 · FLAC · AIFF — até 200 MB</p>
           </>
         )}
         <input
@@ -89,12 +90,14 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
       </div>
 
       {fileError && (
-        <p className="text-red-400 text-sm">{fileError}</p>
+        <p className="text-bad text-sm font-mono">{fileError}</p>
       )}
 
       {/* Preset selector */}
-      <div className="space-y-2">
-        <label className="block text-sm font-medium text-gray-300">Destino da faixa</label>
+      <div className="space-y-3">
+        <label className="block text-xs font-medium text-dim uppercase tracking-widest">
+          Destino
+        </label>
         <div className="grid grid-cols-3 gap-2">
           {PRESET_OPTIONS.map((opt) => (
             <button
@@ -102,11 +105,13 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
               type="button"
               onClick={() => setPreset(opt.value)}
               disabled={disabled}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors
-                ${preset === opt.value
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}
-                ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+              className={[
+                'px-3 py-2 rounded text-sm font-medium transition-colors border',
+                preset === opt.value
+                  ? 'bg-brass-faint border-brass text-brass'
+                  : 'bg-surface border-muted text-dim hover:border-faint hover:text-fg',
+                disabled ? 'opacity-40 pointer-events-none' : '',
+              ].join(' ')}
             >
               {opt.label}
             </button>
@@ -117,9 +122,9 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
       <button
         type="submit"
         disabled={!file || !!fileError || disabled}
-        className="w-full py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:pointer-events-none text-white font-semibold transition-colors"
+        className="w-full py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors disabled:opacity-30 disabled:pointer-events-none"
       >
-        Analisar e corrigir
+        Analisar
       </button>
     </form>
   )

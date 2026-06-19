@@ -10,12 +10,8 @@ const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_
 }
 
 const PRESET_LABELS: Record<string, string> = {
-  spotify: 'Spotify',
-  apple_music: 'Apple Music',
-  youtube: 'YouTube',
-  club: 'Club / DJ',
-  radio: 'Rádio',
-  cd_master: 'CD Master',
+  spotify: 'Spotify', apple_music: 'Apple Music', youtube: 'YouTube',
+  club: 'Club / DJ', radio: 'Rádio', cd_master: 'CD Master',
 }
 
 interface Row {
@@ -28,12 +24,12 @@ interface Row {
 
 const ROWS: Row[] = [
   { label: 'Volume integrado',      key: 'integrated_lufs',   unit: 'LUFS', target: null },
-  { label: 'Volume de curto prazo', key: 'short_term_lufs',   unit: 'LUFS', target: null },
+  { label: 'Volume curto prazo',    key: 'short_term_lufs',   unit: 'LUFS', target: null },
   { label: 'Pico verdadeiro',       key: 'true_peak',         unit: 'dBTP', target: null, lowerIsBetter: true },
   { label: 'Pico de amostra',       key: 'sample_peak',       unit: 'dBFS', target: -0.5, lowerIsBetter: true },
   { label: 'Faixa dinâmica',        key: 'dynamic_range',     unit: 'dB',   target: 9.0 },
   { label: 'Variação de loudness',  key: 'loudness_range',    unit: 'LU',   target: null },
-  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0, lowerIsBetter: true },
+  { label: 'Balanço L/R',           key: 'lr_balance',        unit: '%',    target: 0.0,  lowerIsBetter: true },
   { label: 'Correlação de fase',    key: 'phase_correlation', unit: '',     target: 1.0 },
 ]
 
@@ -45,11 +41,15 @@ function getTarget(row: Row, cfg: typeof PRESETS[string]): number {
   return 0
 }
 
-function statusColor(value: number, target: number, lowerIsBetter: boolean): string {
-  const dist = lowerIsBetter ? value - target : Math.abs(value - target)
-  if (dist <= 1.0) return 'text-emerald-400'
-  if (dist <= 3.0) return 'text-yellow-400'
-  return 'text-red-400'
+function deviation(value: number, target: number, lowerIsBetter: boolean): number {
+  return lowerIsBetter ? value - target : Math.abs(value - target)
+}
+
+function valueColor(value: number, target: number, lowerIsBetter: boolean): string {
+  const d = deviation(value, target, lowerIsBetter)
+  if (d <= 1.0) return 'text-ok'
+  if (d <= 3.0) return 'text-warn'
+  return 'text-bad'
 }
 
 function fmt(value: number, unit: string): string {
@@ -69,51 +69,57 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
   const presetLabel = PRESET_LABELS[preset] ?? preset
 
   const issues = ROWS.filter((row) => {
-    const target = getTarget(row, cfg)
-    const value = metrics[row.key] as number
-    const dist = row.lowerIsBetter ? value - target : Math.abs(value - target)
-    return dist > 1.0
+    const d = deviation(metrics[row.key] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
+    return d > 1.0
   }).length
 
   return (
-    <div className="w-full max-w-3xl mx-auto space-y-6">
+    <div className="w-full max-w-2xl space-y-6">
       {/* Header */}
-      <div>
-        <div className="flex items-center gap-3 mb-1">
-          <h2 className="text-xl font-semibold text-white">Diagnóstico — {presetLabel}</h2>
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <p className="text-xs text-dim uppercase tracking-widest mb-1 font-mono">{presetLabel}</p>
+          <h2 className="text-lg font-bold text-fg">Diagnóstico</h2>
+        </div>
+        <div className="text-right">
           {issues === 0 ? (
-            <span className="px-2 py-0.5 rounded text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 uppercase tracking-wide">
-              Pronto para lançar
+            <span className="text-xs font-mono font-medium text-ok bg-ok/10 border border-ok/20 px-2 py-1 rounded">
+              Dentro do alvo
             </span>
           ) : (
-            <span className="px-2 py-0.5 rounded text-xs font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 uppercase tracking-wide">
-              {issues} {issues === 1 ? 'ajuste' : 'ajustes'} necessário{issues === 1 ? '' : 's'}
+            <span className="text-xs font-mono font-medium text-warn bg-warn/10 border border-warn/20 px-2 py-1 rounded">
+              {issues} {issues === 1 ? 'ajuste' : 'ajustes'}
             </span>
           )}
         </div>
-        <p className="text-gray-500 text-sm truncate">{filename}</p>
       </div>
 
-      {/* Table */}
-      <div className="rounded-xl border border-gray-800 overflow-hidden">
-        <table className="w-full text-sm">
+      <p className="text-xs text-faint font-mono truncate">{filename}</p>
+
+      {/* Metrics table */}
+      <div className="rounded-lg border border-muted overflow-hidden">
+        <table className="w-full">
           <thead>
-            <tr className="bg-gray-900 text-gray-400 text-left">
-              <th className="px-4 py-3 font-medium">Métrica</th>
-              <th className="px-4 py-3 font-medium text-right">Valor</th>
-              <th className="px-4 py-3 font-medium text-right">Alvo</th>
+            <tr className="bg-surface border-b border-muted">
+              <th className="px-4 py-3 text-left text-xs font-medium text-dim uppercase tracking-widest">Métrica</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Valor</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-dim uppercase tracking-widest">Alvo</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800">
+          <tbody className="divide-y divide-muted">
             {ROWS.map((row) => {
               const target = getTarget(row, cfg)
               const value = metrics[row.key] as number
-              const color = statusColor(value, target, row.lowerIsBetter ?? false)
+              const color = valueColor(value, target, row.lowerIsBetter ?? false)
               return (
-                <tr key={row.key} className="bg-gray-950 hover:bg-gray-900/50 transition-colors">
-                  <td className="px-4 py-3 text-gray-300">{row.label}</td>
-                  <td className={`px-4 py-3 text-right font-mono font-medium ${color}`}>{fmt(value, row.unit)}</td>
-                  <td className="px-4 py-3 text-right text-gray-500 font-mono">{fmt(target, row.unit)}</td>
+                <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
+                  <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
+                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${color}`}>
+                    {fmt(value, row.unit)}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-sm text-faint">
+                    {fmt(target, row.unit)}
+                  </td>
                 </tr>
               )
             })}
@@ -122,23 +128,23 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
       </div>
 
       {/* Legend */}
-      <div className="flex gap-4 text-xs text-gray-500">
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Dentro do alvo</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-yellow-400 inline-block" />Atenção</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-400 inline-block" />Fora do alvo</span>
+      <div className="flex gap-6 text-xs font-mono text-faint">
+        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-ok inline-block" />ok</span>
+        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-warn inline-block" />atenção</span>
+        <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-bad inline-block" />fora do alvo</span>
       </div>
 
       {/* Actions */}
       <div className="flex gap-3 pt-2">
         <button
           onClick={onCorrect}
-          className="flex-1 py-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold transition-colors"
+          className="flex-1 py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
         >
           Aplicar correção
         </button>
         <button
           onClick={onReset}
-          className="px-5 py-3 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-200 font-semibold transition-colors"
+          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors"
         >
           Trocar arquivo
         </button>
