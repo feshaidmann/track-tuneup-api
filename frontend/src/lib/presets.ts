@@ -26,17 +26,21 @@ export interface MetricRow {
   target: number | null
   lowerIsBetter?: boolean
   group: 'critical' | 'info'
+  // Limites de desvio próprios da métrica (escalas LUFS, %, dB e coeficiente
+  // não são comparáveis com um único threshold global).
+  warnAt: number
+  badAt: number
 }
 
 export const ROWS: MetricRow[] = [
-  { label: 'Volume integrado',     key: 'integrated_lufs',   unit: 'LUFS', target: null,  group: 'critical' },
-  { label: 'Volume curto prazo',   key: 'short_term_lufs',   unit: 'LUFS', target: null,  group: 'critical' },
-  { label: 'Pico verdadeiro',      key: 'true_peak',         unit: 'dBTP', target: null,  lowerIsBetter: true, group: 'critical' },
-  { label: 'Pico de amostra',      key: 'sample_peak',       unit: 'dBFS', target: -0.5,  lowerIsBetter: true, group: 'info' },
-  { label: 'Faixa dinâmica',       key: 'dynamic_range',     unit: 'dB',   target: 9.0,   group: 'info' },
-  { label: 'Variação de loudness', key: 'loudness_range',    unit: 'LU',   target: null,  group: 'info' },
-  { label: 'Balanço L/R',          key: 'lr_balance',        unit: '%',    target: 0.0,   lowerIsBetter: true, group: 'info' },
-  { label: 'Correlação de fase',   key: 'phase_correlation', unit: '',     target: 1.0,   group: 'info' },
+  { label: 'Volume integrado',     key: 'integrated_lufs',   unit: 'LUFS', target: null,  group: 'critical', warnAt: 1.0, badAt: 3.0 },
+  { label: 'Volume curto prazo',   key: 'short_term_lufs',   unit: 'LUFS', target: null,  group: 'critical', warnAt: 2.0, badAt: 4.0 },
+  { label: 'Pico verdadeiro',      key: 'true_peak',         unit: 'dBTP', target: null,  lowerIsBetter: true, group: 'critical', warnAt: 0.1, badAt: 1.0 },
+  { label: 'Pico de amostra',      key: 'sample_peak',       unit: 'dBFS', target: -0.5,  lowerIsBetter: true, group: 'info', warnAt: 0.5, badAt: 1.0 },
+  { label: 'Faixa dinâmica',       key: 'dynamic_range',     unit: 'dB',   target: 9.0,   group: 'info', warnAt: 3.0, badAt: 6.0 },
+  { label: 'Variação de loudness', key: 'loudness_range',    unit: 'LU',   target: null,  group: 'info', warnAt: 3.0, badAt: 6.0 },
+  { label: 'Balanço L/R',          key: 'lr_balance',        unit: '%',    target: 0.0,   lowerIsBetter: true, group: 'info', warnAt: 5.0, badAt: 15.0 },
+  { label: 'Correlação de fase',   key: 'phase_correlation', unit: '',     target: 1.0,   group: 'info', warnAt: 0.3, badAt: 0.6 },
 ]
 
 export function getTarget(row: MetricRow, cfg: PresetCfg): number {

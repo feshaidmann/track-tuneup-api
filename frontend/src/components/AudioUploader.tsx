@@ -13,6 +13,11 @@ const PRESET_OPTIONS = [
 const ACCEPTED = '.wav,.mp3,.flac,.aiff,.aif'
 const MAX_SIZE = 200 * 1024 * 1024
 
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / 1024).toFixed(0)} KB`
+}
+
 interface Props {
   onSubmit: (file: File, preset: string) => void
   disabled: boolean
@@ -54,10 +59,7 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-lg space-y-8">
-      <div>
-        <h1 className="text-xl font-bold text-fg tracking-tight mb-1">Track Tuneup</h1>
-        <p className="text-sm text-dim">Análise e correção de loudness para streaming e masterização</p>
-      </div>
+      <p className="text-sm text-dim">Análise e correção de loudness para streaming e masterização</p>
 
       {/* Drop zone */}
       <div
@@ -81,7 +83,17 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
         ].join(' ')}
       >
         {file ? (
-          <p className="text-brass font-mono text-sm">{file.name}</p>
+          <div className="flex flex-col items-center gap-1">
+            <p className="text-brass font-mono text-sm break-all text-center">{file.name}</p>
+            <p className="text-dim font-mono text-xs">{formatSize(file.size)} · clique para trocar</p>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setFile(null); setFileError(''); if (inputRef.current) inputRef.current.value = '' }}
+              className="mt-1 text-xs font-mono text-dim hover:text-bad transition-colors"
+            >
+              ✕ remover
+            </button>
+          </div>
         ) : (
           <>
             <p className="text-fg text-sm font-medium">Arraste ou clique para selecionar</p>

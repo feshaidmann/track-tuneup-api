@@ -58,14 +58,25 @@ interface Props {
   afterMetrics: AudioMetrics
   downloadUrl: string
   preset: string
+  filename: string
   onReset: () => void
+  onRetryPreset: (preset: string) => void
+  disabled?: boolean
 }
 
-export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, preset, onReset }: Props) {
+function downloadName(original: string, preset: string): string {
+  const base = original.replace(/\.[^.]+$/, '') || 'faixa'
+  return `${base}_${preset}.wav`
+}
+
+export function AnalysisResults({
+  beforeMetrics, afterMetrics, downloadUrl, preset, filename, onReset, onRetryPreset, disabled = false,
+}: Props) {
   const cfg         = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
   const status      = getStatus(afterMetrics, cfg)
   const statusCfg   = STATUS_CONFIG[status]
+  const otherPresets = Object.keys(PRESETS).filter((p) => p !== preset)
 
   return (
     <div className="w-full max-w-2xl space-y-6">
@@ -131,17 +142,35 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
       <div className="flex gap-3 pt-2">
         <a
           href={downloadUrl}
-          download="corrected.wav"
+          download={downloadName(filename, preset)}
           className="flex-1 text-center py-3 rounded bg-brass text-canvas font-bold text-sm tracking-wide hover:bg-brass-dim transition-colors"
         >
           Baixar faixa corrigida
         </a>
         <button
           onClick={onReset}
-          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors"
+          disabled={disabled}
+          className="px-6 py-3 rounded border border-muted text-dim text-sm font-medium hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
         >
           Nova análise
         </button>
+      </div>
+
+      {/* Testar outro preset com o mesmo arquivo */}
+      <div className="space-y-2 pt-2">
+        <p className="text-xs text-dim font-mono">Testar outro destino com o mesmo arquivo:</p>
+        <div className="grid grid-cols-3 gap-2">
+          {otherPresets.map((p) => (
+            <button
+              key={p}
+              onClick={() => onRetryPreset(p)}
+              disabled={disabled}
+              className="px-3 py-2 rounded text-sm font-medium border bg-surface border-muted text-dim hover:border-faint hover:text-fg transition-colors disabled:opacity-30 disabled:pointer-events-none"
+            >
+              {PRESET_LABELS[p] ?? p}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )

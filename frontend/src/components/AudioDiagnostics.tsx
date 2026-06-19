@@ -1,12 +1,12 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
-import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt } from '../lib/presets'
+import { PRESETS, PRESET_LABELS, ROWS, getTarget, deviation, fmt, MetricRow } from '../lib/presets'
 
 type Status = 'ok' | 'warn' | 'bad'
 
-function valueStatus(value: number, target: number, lowerIsBetter: boolean): Status {
-  const d = deviation(value, target, lowerIsBetter)
-  if (d <= 1.0) return 'ok'
-  if (d <= 3.0) return 'warn'
+function valueStatus(value: number, target: number, row: MetricRow): Status {
+  const d = deviation(value, target, row.lowerIsBetter ?? false)
+  if (d <= row.warnAt) return 'ok'
+  if (d <= row.badAt) return 'warn'
   return 'bad'
 }
 
@@ -54,7 +54,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
 
   const issues = ROWS.filter((row) => {
     const d = deviation(metrics[row.key as keyof AudioMetrics] as number, getTarget(row, cfg), row.lowerIsBetter ?? false)
-    return d > 1.0
+    return d > row.warnAt
   }).length
 
   const verdict = buildVerdict(metrics, preset)
@@ -65,7 +65,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
   const renderRow = (row: typeof ROWS[number]) => {
     const target = getTarget(row, cfg)
     const value = metrics[row.key as keyof AudioMetrics] as number
-    const status = valueStatus(value, target, row.lowerIsBetter ?? false)
+    const status = valueStatus(value, target, row)
     const targetLabel = row.key === 'loudness_range'
       ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
       : fmt(target, row.unit)
