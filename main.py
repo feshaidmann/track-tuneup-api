@@ -48,20 +48,39 @@ def _loudnorm_measure(src: str, target_i: float, target_tp: float, target_lra: f
     return json.loads(combined[start:end])
 
 
-def _loudnorm_apply(src: str, dst: str, target_i: float, target_tp: float, target_lra: float, measured: dict) -> None:
-    measured_lra = float(measured["input_lra"])
-    use_linear = "true" if measured_lra <= target_lra else "false"
+# loudnorm aceita measured_I/measured_TP em [-99, 0] e measured_thresh em [-99, 0].
+# Faixas com clipping severo medem acima de 0 e quebram o modo two-pass linear.
+def _measured_in_range(measured: dict) -> bool:
+    try:
+        return (
+            -99.0 <= float(measured["input_i"]) <= 0.0
+            and -99.0 <= float(measured["input_tp"]) <= 0.0
+            and -99.0 <= float(measured["input_thresh"]) <= 0.0
+        )
+    except (KeyError, ValueError, TypeError):
+        return False
 
-    af = (
-        f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
-        f":measured_I={measured['input_i']}"
-        f":measured_LRA={measured['input_lra']}"
-        f":measured_TP={measured['input_tp']}"
-        f":measured_thresh={measured['input_thresh']}"
-        f":offset={measured['target_offset']}"
-        f":linear={use_linear}"
-        f":print_format=none"
-    )
+
+def _loudnorm_apply(src: str, dst: str, target_i: float, target_tp: float, target_lra: float, measured: dict) -> None:
+    if _measured_in_range(measured):
+        # Two-pass: linear quando a dinâmica medida cabe no alvo, dynamic caso contrário.
+        measured_lra = float(measured["input_lra"])
+        use_linear = "true" if measured_lra <= target_lra else "false"
+        af = (
+            f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
+            f":measured_I={measured['input_i']}"
+            f":measured_LRA={measured['input_lra']}"
+            f":measured_TP={measured['input_tp']}"
+            f":measured_thresh={measured['input_thresh']}"
+            f":offset={measured['target_offset']}"
+            f":linear={use_linear}"
+            f":print_format=none"
+        )
+    else:
+        # Fallback dinâmico (single-pass): aceita qualquer entrada, inclusive
+        # faixas clipando acima de 0 LUFS que o two-pass rejeitaria.
+        af = f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=none"
+
     cmd = ["ffmpeg", "-y", "-i", src, "-af", af, "-ar", "44100", "-c:a", "pcm_s24le", dst]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
