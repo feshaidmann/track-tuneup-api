@@ -9,6 +9,34 @@ const PRESETS: Record<string, { integrated_lufs: number; true_peak: number; lra_
   cd_master:   { integrated_lufs: -10.5, true_peak:  0.0, lra_min: 6,  lra_max: 14 },
 }
 
+type ConfirmationStatus = 'confirmed' | 'close' | 'off-target'
+
+function getCorrectionStatus(after: AudioMetrics, cfg: typeof PRESETS[string]): ConfirmationStatus {
+  const lufsDiff = Math.abs(after.integrated_lufs - cfg.integrated_lufs)
+  const peakOk = after.true_peak <= cfg.true_peak + 0.1 // 0.1 dB tolerance for rounding
+  if (lufsDiff <= 1.0 && peakOk) return 'confirmed'
+  if (lufsDiff <= 2.0) return 'close'
+  return 'off-target'
+}
+
+const STATUS_CONFIG = {
+  confirmed: {
+    label: '✓ Dentro do alvo',
+    classes: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    detail: 'LUFS e true peak dentro dos limites do preset.',
+  },
+  close: {
+    label: '⚠ Próximo do alvo',
+    classes: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+    detail: 'LUFS dentro de ±2 LU — aceitável, mas não ideal.',
+  },
+  'off-target': {
+    label: '✗ Fora do alvo',
+    classes: 'bg-red-500/15 text-red-400 border-red-500/30',
+    detail: 'A correção não atingiu o alvo. Verifique o arquivo de origem.',
+  },
+}
+
 const PRESET_LABELS: Record<string, string> = {
   spotify: 'Spotify',
   apple_music: 'Apple Music',
@@ -60,6 +88,8 @@ interface Props {
 export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, preset, onReset }: Props) {
   const cfg = PRESETS[preset]
   const presetLabel = PRESET_LABELS[preset] ?? preset
+  const status = getCorrectionStatus(afterMetrics, cfg)
+  const statusCfg = STATUS_CONFIG[status]
 
   function getTarget(row: Row): number {
     if (row.target !== null) return row.target
@@ -114,6 +144,12 @@ export function AnalysisResults({ beforeMetrics, afterMetrics, downloadUrl, pres
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Correction confirmation badge */}
+      <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${statusCfg.classes}`}>
+        <span className="font-semibold text-sm">{statusCfg.label}</span>
+        <span className="text-xs opacity-75">{statusCfg.detail}</span>
       </div>
 
       {/* Legend */}
