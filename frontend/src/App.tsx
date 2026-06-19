@@ -1,42 +1,70 @@
 import { useState } from 'react'
 import { analyzeAudio, AudioMetrics } from './lib/audioAnalysis'
 import { AudioUploader } from './components/AudioUploader'
+import { AudioDiagnostics } from './components/AudioDiagnostics'
 import { AnalysisResults } from './components/AnalysisResults'
 
 const RAILWAY_URL = 'https://track-tuneup-api-production.up.railway.app'
 
-type LoadingStep =
-  | 'Lendo o arquivo...'
-  | 'Analisando original...'
-  | 'Aplicando correções...'
-  | 'Analisando resultado...'
-  | 'Pronto!'
+type Screen = 'upload' | 'diagnostics' | 'results'
 
-interface Results {
+interface DiagnosticsState {
+  metrics: AudioMetrics
+  file: File
+  preset: string
+}
+
+interface ResultsState {
   beforeMetrics: AudioMetrics
   afterMetrics: AudioMetrics
   downloadUrl: string
   preset: string
 }
 
-export default function App() {
-  const [loadingStep, setLoadingStep] = useState<LoadingStep | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [results, setResults] = useState<Results | null>(null)
+function Spinner({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-lg border border-muted bg-surface">
+      <span
+        className="w-3.5 h-3.5 rounded-full border-2 border-brass border-t-transparent animate-spin shrink-0"
+        aria-hidden
+      />
+      <span className="text-sm font-mono text-dim">{label}</span>
+    </div>
+  )
+}
 
-  async function handleAnalyze(file: File, preset: string) {
+export default function App() {
+  const [screen, setScreen]         = useState<Screen>('upload')
+  const [loadingStep, setLoadingStep] = useState<string | null>(null)
+  const [error, setError]           = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsState | null>(null)
+  const [results, setResults]       = useState<ResultsState | null>(null)
+
+  async function handleUpload(file: File, preset: string) {
     setError(null)
-    setResults(null)
+    try {
+      const ctx = new AudioContext()
+      setLoadingStep('Lendo o arquivo...')
+      const raw = await file.arrayBuffer()
+      setLoadingStep('Analisando...')
+      const buf = await ctx.decodeAudioData(raw)
+      const metrics = analyzeAudio(buf)
+      setDiagnostics({ metrics, file, preset })
+      setScreen('diagnostics')
+    } catch {
+      setError('Não foi possível analisar o arquivo. Verifique o formato.')
+    } finally {
+      setLoadingStep(null)
+    }
+  }
+
+  async function handleCorrect() {
+    if (!diagnostics) return
+    const { file, preset, metrics: beforeMetrics } = diagnostics
+    setError(null)
 
     try {
-      const audioContext = new AudioContext()
-
-      setLoadingStep('Lendo o arquivo...')
-      const rawBuffer = await file.arrayBuffer()
-
-      setLoadingStep('Analisando original...')
-      const originalAudioBuffer = await audioContext.decodeAudioData(rawBuffer.slice(0))
-      const beforeMetrics = analyzeAudio(originalAudioBuffer)
+      const ctx = new AudioContext()
 
       setLoadingStep('Aplicando correções...')
       const formData = new FormData()
@@ -45,30 +73,25 @@ export default function App() {
 
       let response: Response
       try {
-        response = await fetch(`${RAILWAY_URL}/analyze`, {
-          method: 'POST',
-          body: formData,
-        })
+        response = await fetch(`${RAILWAY_URL}/analyze`, { method: 'POST', body: formData })
       } catch {
         throw new Error('Não foi possível conectar ao servidor de processamento.')
       }
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        throw new Error(body.detail ?? 'Falha no processamento.')
+        throw new Error((body as { error?: string }).error ?? 'Falha no processamento.')
       }
 
-      const correctedBlob = await response.blob()
+      const blob = await response.blob()
 
-      setLoadingStep('Analisando resultado...')
-      const correctedBuffer = await correctedBlob.arrayBuffer()
-      const correctedAudioBuffer = await audioContext.decodeAudioData(correctedBuffer.slice(0))
+      setLoadingStep('Medindo resultado...')
+      const correctedAudioBuffer = await ctx.decodeAudioData(await blob.arrayBuffer())
       const afterMetrics = analyzeAudio(correctedAudioBuffer)
+      const downloadUrl  = URL.createObjectURL(blob)
 
-      const downloadUrl = URL.createObjectURL(correctedBlob)
-
-      setLoadingStep('Pronto!')
       setResults({ beforeMetrics, afterMetrics, downloadUrl, preset })
+      setScreen('results')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro inesperado.')
     } finally {
@@ -78,38 +101,51 @@ export default function App() {
 
   function handleReset() {
     if (results?.downloadUrl) URL.revokeObjectURL(results.downloadUrl)
+    setDiagnostics(null)
     setResults(null)
     setError(null)
+    setScreen('upload')
   }
 
-  const isLoading = loadingStep !== null && loadingStep !== 'Pronto!'
+  const isLoading = loadingStep !== null
 
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-4 py-12">
-      {results ? (
-        <AnalysisResults
-          beforeMetrics={results.beforeMetrics}
-          afterMetrics={results.afterMetrics}
-          downloadUrl={results.downloadUrl}
-          preset={results.preset}
-          onReset={handleReset}
-        />
-      ) : (
-        <div className="w-full max-w-lg space-y-6">
-          <AudioUploader onSubmit={handleAnalyze} disabled={isLoading} />
-
-          {isLoading && (
-            <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-900 border border-gray-800">
-              <span className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin shrink-0" />
-              <span className="text-sm text-gray-300">{loadingStep}</span>
-            </div>
-          )}
-
+    <div className="min-h-screen bg-canvas flex flex-col items-center justify-center px-4 py-12">
+      {screen === 'upload' && (
+        <div className="w-full max-w-lg space-y-4">
+          <AudioUploader onSubmit={handleUpload} disabled={isLoading} />
+          {isLoading && <Spinner label={loadingStep!} />}
           {error && (
-            <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-              {error}
-            </div>
+            <p className="text-bad text-sm font-mono px-1">{error}</p>
           )}
+        </div>
+      )}
+
+      {screen === 'diagnostics' && diagnostics && (
+        <div className="w-full max-w-2xl space-y-4">
+          <AudioDiagnostics
+            metrics={diagnostics.metrics}
+            preset={diagnostics.preset}
+            filename={diagnostics.file.name}
+            onCorrect={handleCorrect}
+            onReset={handleReset}
+          />
+          {isLoading && <Spinner label={loadingStep!} />}
+          {error && (
+            <p className="text-bad text-sm font-mono px-1">{error}</p>
+          )}
+        </div>
+      )}
+
+      {screen === 'results' && results && (
+        <div className="w-full max-w-2xl">
+          <AnalysisResults
+            beforeMetrics={results.beforeMetrics}
+            afterMetrics={results.afterMetrics}
+            downloadUrl={results.downloadUrl}
+            preset={results.preset}
+            onReset={handleReset}
+          />
         </div>
       )}
     </div>
