@@ -2,6 +2,7 @@ import tempfile
 import subprocess
 import json
 import shutil
+import functools
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form
@@ -87,6 +88,42 @@ def _loudnorm_apply(src: str, dst: str, target_i: float, target_tp: float, targe
         raise RuntimeError(f"Falha no Pass 2: {result.stderr[-500:]}")
 
 
+@functools.lru_cache(maxsize=1)
+def _alimiter_has_oversample() -> bool:
+    # A opção oversample do alimiter só existe em builds mais recentes do ffmpeg.
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-h", "filter=alimiter"],
+            capture_output=True, text=True,
+        )
+        return "oversample" in (out.stdout + out.stderr)
+    except Exception:
+        return False
+
+
+def _true_peak_limit(src: str, dst: str, ceiling_db: float) -> None:
+    # Estágio final: limiter dedicado de true peak para capturar inter-sample
+    # peaks residuais que o loudnorm possa deixar passar.
+    # alimiter usa limit em escala linear, não dB: linear = 10^(dB/20).
+    # limit válido em [0.0625, 1]; ceiling 0 dB -> 1.0 (sem teto extra).
+    limit_linear = min(1.0, max(0.0625, 10 ** (ceiling_db / 20)))
+    # level=false: não auto-normaliza o nível, só limita picos.
+    limiter = f"alimiter=limit={limit_linear:.6f}:level=false:asc=1"
+
+    if _alimiter_has_oversample():
+        # Caminho ideal: oversampling 4x nativo, sem reamostragem extra.
+        af = f"{limiter}:oversample=4"
+    else:
+        # Fallback portável: limita no domínio 4x superamostrado e reamostra de
+        # volta, aproximando o controle de inter-sample peaks em qualquer versão.
+        af = f"aresample=176400,{limiter},aresample=44100"
+
+    cmd = ["ffmpeg", "-y", "-i", src, "-af", af, "-ar", "44100", "-c:a", "pcm_s24le", dst]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Falha no true peak limiter: {result.stderr[-500:]}")
+
+
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...), preset: str = Form(...)):
     if preset not in PRESETS:
@@ -99,13 +136,21 @@ async def analyze(file: UploadFile = File(...), preset: str = Form(...)):
     try:
         ext = Path(file.filename or "audio.wav").suffix or ".wav"
         src_path = Path(tmpdir) / f"original{ext}"
+        loudnorm_path = Path(tmpdir) / "loudnorm.wav"
         corrected_path = Path(tmpdir) / "corrected.wav"
 
         content = await file.read()
         src_path.write_bytes(content)
 
+        # Estágio 1+2: loudnorm two-pass (equilibra loudness e true peak).
         measured = _loudnorm_measure(str(src_path), target_i, target_tp, target_lra)
-        _loudnorm_apply(str(src_path), str(corrected_path), target_i, target_tp, target_lra, measured)
+        _loudnorm_apply(str(src_path), str(loudnorm_path), target_i, target_tp, target_lra, measured)
+
+        if not loudnorm_path.exists() or loudnorm_path.stat().st_size == 0:
+            raise RuntimeError("Arquivo corrigido não foi gerado")
+
+        # Estágio 3: true peak limiter dedicado, garantindo o ceiling do preset.
+        _true_peak_limit(str(loudnorm_path), str(corrected_path), target_tp)
 
         if not corrected_path.exists() or corrected_path.stat().st_size == 0:
             raise RuntimeError("Arquivo corrigido não foi gerado")
