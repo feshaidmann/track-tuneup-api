@@ -59,6 +59,28 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
 
   const verdict = buildVerdict(metrics, preset)
 
+  const criticalRows = ROWS.filter((r) => r.group === 'critical')
+  const infoRows = ROWS.filter((r) => r.group === 'info')
+
+  const renderRow = (row: typeof ROWS[number]) => {
+    const target = getTarget(row, cfg)
+    const value = metrics[row.key as keyof AudioMetrics] as number
+    const status = valueStatus(value, target, row.lowerIsBetter ?? false)
+    const targetLabel = row.key === 'loudness_range'
+      ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
+      : fmt(target, row.unit)
+    return (
+      <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
+        <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
+        <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${STATUS_COLOR[status]}`}>
+          <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{STATUS_GLYPH[status]}</span>
+          {fmt(value, row.unit)}
+        </td>
+        <td className="px-4 py-3 text-right font-mono text-sm text-dim">{targetLabel}</td>
+      </tr>
+    )
+  }
+
   return (
     <div className="w-full max-w-2xl space-y-6">
       {/* Header */}
@@ -85,7 +107,7 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
       {/* Human-readable verdict */}
       <p className="text-sm text-dim leading-relaxed">{verdict}</p>
 
-      {/* Metrics table */}
+      {/* Métricas críticas — LUFS e true peak, o que realmente importa */}
       <div className="rounded-lg border border-muted overflow-x-auto">
         <table className="w-full min-w-[28rem]">
           <thead>
@@ -96,29 +118,25 @@ export function AudioDiagnostics({ metrics, preset, filename, onCorrect, onReset
             </tr>
           </thead>
           <tbody className="divide-y divide-muted">
-            {ROWS.map((row) => {
-              const target = getTarget(row, cfg)
-              const value = metrics[row.key as keyof AudioMetrics] as number
-              const status = valueStatus(value, target, row.lowerIsBetter ?? false)
-              const targetLabel = row.key === 'loudness_range'
-                ? `${cfg.lra_min}–${cfg.lra_max} ${row.unit}`
-                : fmt(target, row.unit)
-              return (
-                <tr key={row.key} className="bg-canvas hover:bg-surface/60 transition-colors">
-                  <td className="px-4 py-3 text-sm text-fg">{row.label}</td>
-                  <td className={`px-4 py-3 text-right font-mono text-sm font-medium ${STATUS_COLOR[status]}`}>
-                    <span aria-hidden className="inline-block w-3 mr-1.5 text-center">{STATUS_GLYPH[status]}</span>
-                    {fmt(value, row.unit)}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-sm text-dim">
-                    {targetLabel}
-                  </td>
-                </tr>
-              )
-            })}
+            {criticalRows.map(renderRow)}
           </tbody>
         </table>
       </div>
+
+      {/* Métricas informativas — recolhíveis */}
+      <details className="rounded-lg border border-muted overflow-hidden group">
+        <summary className="px-4 py-3 bg-surface text-xs font-medium text-dim uppercase tracking-widest cursor-pointer select-none hover:text-fg list-none flex items-center justify-between">
+          <span>Detalhes técnicos ({infoRows.length})</span>
+          <span aria-hidden className="transition-transform group-open:rotate-90">›</span>
+        </summary>
+        <div className="overflow-x-auto border-t border-muted">
+          <table className="w-full min-w-[28rem]">
+            <tbody className="divide-y divide-muted">
+              {infoRows.map(renderRow)}
+            </tbody>
+          </table>
+        </div>
+      </details>
 
       {/* Legend */}
       <div className="flex gap-6 text-xs font-mono text-dim">

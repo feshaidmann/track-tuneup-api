@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { presetSummary } from '../lib/presets'
 
 const PRESET_OPTIONS = [
   { value: 'spotify',     label: 'Spotify' },
@@ -105,15 +106,18 @@ export function AudioUploader({ onSubmit, disabled }: Props) {
               type="button"
               onClick={() => setPreset(opt.value)}
               disabled={disabled}
+              title={`Alvo: ${presetSummary(opt.value)}`}
+              aria-pressed={preset === opt.value}
               className={[
-                'px-3 py-2 rounded text-sm font-medium transition-colors border',
+                'flex flex-col items-center gap-0.5 px-3 py-2 rounded text-sm font-medium transition-colors border',
                 preset === opt.value
                   ? 'bg-brass-faint border-brass text-brass'
                   : 'bg-surface border-muted text-dim hover:border-faint hover:text-fg',
                 disabled ? 'opacity-40 pointer-events-none' : '',
               ].join(' ')}
             >
-              {opt.label}
+              <span>{opt.label}</span>
+              <span className="text-[10px] font-mono text-dim leading-none">{presetSummary(opt.value)}</span>
             </button>
           ))}
         </div>

@@ -54,3 +54,12 @@ export function deviation(value: number, target: number, lowerIsBetter: boolean)
 export function fmt(value: number, unit: string): string {
   return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(2)
 }
+
+// Resumo legível do alvo do preset, p/ tooltip/subtítulo (ex. "−14 LUFS · −1 dBTP")
+export function presetSummary(preset: string): string {
+  const cfg = PRESETS[preset]
+  if (!cfg) return ''
+  const i = cfg.integrated_lufs
+  const tp = cfg.true_peak
+  return `${i} LUFS · ${tp} dBTP`
+}
