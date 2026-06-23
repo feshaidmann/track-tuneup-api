@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, AfterValidator
 
@@ -49,3 +49,19 @@ class MixRequestPayload(BaseModel):
     analysis_id: AnalysisId  = None
     contact:     str | None  = Field(default=None, max_length=320)
     notes:       str | None  = Field(default=None, max_length=2000)
+
+
+# Só aceitamos user/assistant do cliente; o system prompt é sempre injetado
+# pelo servidor, nunca vindo do front (evita prompt injection via histórico).
+class ChatMessage(BaseModel):
+    role:    Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class ChatRequest(BaseModel):
+    client_id:      ClientId
+    analysis_id:    AnalysisId           = None
+    preset:         str                  = Field(..., min_length=1, max_length=32)
+    messages:       list[ChatMessage]    = Field(..., min_length=1, max_length=30)
+    metrics_before: dict[str, Any] | None = None
+    metrics_after:  dict[str, Any] | None = None

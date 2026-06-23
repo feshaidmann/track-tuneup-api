@@ -16,6 +16,7 @@ from app.routers import storage as storage_router
 from app.routers import events  as events_router
 from app.routers import admin   as admin_router
 from app.routers import internal as internal_router
+from app.routers import chat    as chat_router
 
 logger = logging.getLogger("track-tuneup")
 
@@ -39,6 +40,7 @@ app.include_router(storage_router.router)
 app.include_router(events_router.router)
 app.include_router(admin_router.router)
 app.include_router(internal_router.router)
+app.include_router(chat_router.router)
 
 app.add_middleware(
     CORSMiddleware,
