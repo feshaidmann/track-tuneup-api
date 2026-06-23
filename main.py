@@ -32,10 +32,11 @@ ALLOWED_ORIGINS = [
 #   https://3dbebccd-...lovable.app           (URL do projeto)
 #   https://id-preview--3dbebccd-...lovable.app  (preview do editor)
 #   https://<branch>--3dbebccd-...lovable.app    (previews de branch)
+#   https://<any>--3dbebccd-...lovable.app       (qualquer preview)
 # Override por env p/ outros ambientes. fullmatch garante que não casa sufixos.
 ALLOWED_ORIGIN_REGEX = os.environ.get(
     "ALLOWED_ORIGIN_REGEX",
-    r"https://(track-tuneup|([a-z0-9-]+--)?3dbebccd-f5c4-4e7a-8278-a1b8acb61c10)\.lovable\.app",
+    r"https://([a-z0-9-]*\.)?lovable\.app",
 )
 # Teto de upload no servidor (o frontend já limita a 200 MB; aqui é a defesa real).
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024 * 1024
@@ -231,3 +232,4 @@ async def analyze(file: UploadFile = File(...), preset: str = Form(...)):
         logger.exception("Falha no /analyze")
         shutil.rmtree(tmpdir, ignore_errors=True)
         return JSONResponse(status_code=500, content={"error": "Falha ao processar o áudio"})
+
