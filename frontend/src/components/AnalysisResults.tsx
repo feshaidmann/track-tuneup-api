@@ -1,6 +1,7 @@
 import { AudioMetrics } from '../lib/audioAnalysis'
 import { PRESETS, PRESET_LABELS, ROWS, getTarget, fmt } from '../lib/presets'
 import { ABComparePlayer } from './ABComparePlayer'
+import { ResultsChat } from './ResultsChat'
 
 function distFromTarget(value: number, target: number, lowerIsBetter: boolean): number {
   return lowerIsBetter ? value - target : Math.abs(value - target)
@@ -187,6 +188,13 @@ export function AnalysisResults({
           ))}
         </div>
       </div>
+
+      {/* Consultor de masterização (chat AI) */}
+      <ResultsChat
+        preset={preset}
+        beforeMetrics={beforeMetrics}
+        afterMetrics={afterMetrics}
+      />
     </div>
   )
 }
