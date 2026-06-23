@@ -21,12 +21,22 @@ from app.routers import chat    as chat_router
 logger = logging.getLogger("track-tuneup")
 
 # --- Limites de hardening (configuráveis por env, com defaults seguros) ---
-# Origem(ns) permitida(s) no CORS — só o frontend publicado, não "*".
+# Origem(ns) permitida(s) no CORS — exatas (lista) e/ou por regex. Nunca "*".
 ALLOWED_ORIGINS = [
     o.strip()
     for o in os.environ.get("ALLOWED_ORIGINS", "https://track-tuneup.lovable.app").split(",")
     if o.strip()
 ]
+# Regex que cobre o publicado + previews do Lovable DESTE projeto:
+#   https://track-tuneup.lovable.app          (domínio publicado)
+#   https://3dbebccd-...lovable.app           (URL do projeto)
+#   https://id-preview--3dbebccd-...lovable.app  (preview do editor)
+#   https://<branch>--3dbebccd-...lovable.app    (previews de branch)
+# Override por env p/ outros ambientes. fullmatch garante que não casa sufixos.
+ALLOWED_ORIGIN_REGEX = os.environ.get(
+    "ALLOWED_ORIGIN_REGEX",
+    r"https://(track-tuneup|([a-z0-9-]+--)?3dbebccd-f5c4-4e7a-8278-a1b8acb61c10)\.lovable\.app",
+)
 # Teto de upload no servidor (o frontend já limita a 200 MB; aqui é a defesa real).
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024 * 1024
 # Timeout de cada chamada ao ffmpeg, para um arquivo patológico não prender o worker.
@@ -45,6 +55,7 @@ app.include_router(chat_router.router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_methods=["POST", "OPTIONS"],
     allow_headers=["*"],
 )
