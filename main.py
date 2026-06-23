@@ -1,3 +1,5 @@
+import os
+import logging
 import tempfile
 import subprocess
 import json
@@ -10,12 +12,28 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 
+logger = logging.getLogger("track-tuneup")
+
+# --- Limites de hardening (configuráveis por env, com defaults seguros) ---
+# Origem(ns) permitida(s) no CORS — só o frontend publicado, não "*".
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", "https://track-tuneup.lovable.app").split(",")
+    if o.strip()
+]
+# Teto de upload no servidor (o frontend já limita a 200 MB; aqui é a defesa real).
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024 * 1024
+# Timeout de cada chamada ao ffmpeg, para um arquivo patológico não prender o worker.
+FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "120"))
+# Extensões de áudio aceitas (mesmo conjunto do frontend).
+ALLOWED_EXTS = {".wav", ".mp3", ".flac", ".aiff", ".aif"}
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -40,7 +58,7 @@ def _loudnorm_measure(src: str, target_i: float, target_tp: float, target_lra: f
         "-af", f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json",
         "-f", "null", "-",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     combined = result.stdout + result.stderr
     start = combined.rfind("{")
     end = combined.rfind("}") + 1
@@ -83,7 +101,7 @@ def _loudnorm_apply(src: str, dst: str, target_i: float, target_tp: float, targe
         af = f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=none"
 
     cmd = ["ffmpeg", "-y", "-i", src, "-af", af, "-ar", "44100", "-c:a", "pcm_s24le", dst]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     if result.returncode != 0:
         raise RuntimeError(f"Falha no Pass 2: {result.stderr[-500:]}")
 
@@ -94,7 +112,7 @@ def _alimiter_has_oversample() -> bool:
     try:
         out = subprocess.run(
             ["ffmpeg", "-hide_banner", "-h", "filter=alimiter"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=15,
         )
         return "oversample" in (out.stdout + out.stderr)
     except Exception:
@@ -119,7 +137,7 @@ def _true_peak_limit(src: str, dst: str, ceiling_db: float) -> None:
         af = f"aresample=176400,{limiter},aresample=44100"
 
     cmd = ["ffmpeg", "-y", "-i", src, "-af", af, "-ar", "44100", "-c:a", "pcm_s24le", dst]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     if result.returncode != 0:
         raise RuntimeError(f"Falha no true peak limiter: {result.stderr[-500:]}")
 
@@ -129,18 +147,37 @@ async def analyze(file: UploadFile = File(...), preset: str = Form(...)):
     if preset not in PRESETS:
         return JSONResponse(status_code=400, content={"error": "Preset inválido"})
 
+    # Validação de tipo: rejeita antes de gastar CPU com ffmpeg.
+    ext = Path(file.filename or "audio.wav").suffix.lower() or ".wav"
+    if ext not in ALLOWED_EXTS:
+        return JSONResponse(status_code=415, content={"error": "Formato não suportado"})
+
     cfg = PRESETS[preset]
     target_i, target_tp, target_lra = cfg["integrated_lufs"], cfg["true_peak"], cfg["target_lra"]
 
     tmpdir = tempfile.mkdtemp()
     try:
-        ext = Path(file.filename or "audio.wav").suffix or ".wav"
         src_path = Path(tmpdir) / f"original{ext}"
         loudnorm_path = Path(tmpdir) / "loudnorm.wav"
         corrected_path = Path(tmpdir) / "corrected.wav"
 
-        content = await file.read()
-        src_path.write_bytes(content)
+        # Grava em streaming com teto de tamanho: não carrega o arquivo inteiro em
+        # memória e aborta cedo se passar do limite (defesa contra exaustão/DoS).
+        size = 0
+        with open(src_path, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    return JSONResponse(status_code=413, content={"error": "Arquivo muito grande"})
+                out.write(chunk)
+
+        if size == 0:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return JSONResponse(status_code=400, content={"error": "Arquivo vazio"})
 
         # Estágio 1+2: loudnorm two-pass (equilibra loudness e true peak).
         measured = _loudnorm_measure(str(src_path), target_i, target_tp, target_lra)
@@ -161,6 +198,13 @@ async def analyze(file: UploadFile = File(...), preset: str = Form(...)):
             filename="corrected.wav",
             background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
         )
-    except Exception as e:
+    except subprocess.TimeoutExpired:
+        logger.exception("Timeout do ffmpeg no /analyze")
         shutil.rmtree(tmpdir, ignore_errors=True)
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=504, content={"error": "Tempo de processamento excedido"})
+    except Exception:
+        # Loga o detalhe internamente, mas devolve mensagem genérica (não vaza
+        # stderr do ffmpeg / caminhos internos para o cliente).
+        logger.exception("Falha no /analyze")
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return JSONResponse(status_code=500, content={"error": "Falha ao processar o áudio"})
