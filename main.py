@@ -12,6 +12,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.background import BackgroundTask
 
+from app.routers import storage as storage_router
+from app.routers import events  as events_router
+from app.routers import admin   as admin_router
+from app.routers import internal as internal_router
+
 logger = logging.getLogger("track-tuneup")
 
 # --- Limites de hardening (configuráveis por env, com defaults seguros) ---
@@ -29,6 +34,11 @@ FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "120"))
 ALLOWED_EXTS = {".wav", ".mp3", ".flac", ".aiff", ".aif"}
 
 app = FastAPI()
+
+app.include_router(storage_router.router)
+app.include_router(events_router.router)
+app.include_router(admin_router.router)
+app.include_router(internal_router.router)
 
 app.add_middleware(
     CORSMiddleware,
